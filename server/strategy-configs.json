@@ -1,0 +1,76 @@
+{
+  "deribit_jelly_main": [
+    {
+      "id": "table_0",
+      "config": {
+        "exchange": "deribit",
+        "strategy": "Jelly",
+        "symbol": "BTC",
+        "optionExpiry": "10OCT25",
+        "futureExpiry": "17OCT25",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    },
+    {
+      "id": "table_1",
+      "config": {
+        "exchange": "deribit",
+        "strategy": "Synthetic",
+        "symbol": "BTC",
+        "optionExpiry": "10OCT25",
+        "futureExpiry": "10OCT25",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    },
+    {
+      "id": "table_2",
+      "config": {
+        "exchange": "deribit",
+        "strategy": "Butterfly",
+        "symbol": "BTC",
+        "optionExpiry": "6OCT25",
+        "futureExpiry": "10OCT25",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    },
+    {
+      "id": "table_3",
+      "config": {
+        "exchange": "deribit",
+        "strategy": "Ratio",
+        "symbol": "BTC",
+        "optionExpiry": "10OCT25",
+        "futureExpiry": "10OCT25",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    }
+  ]
+}

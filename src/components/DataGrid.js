@@ -6,11 +6,14 @@ const DataGrid = ({ marketData }) => {
   const [sortConfig, setSortConfig] = useState({
     deribit: { key: null, direction: "asc" },
     binance: { key: null, direction: "asc" },
+    bybit: { key: null, direction: "asc" },
   });
   const [filterText, setFilterText] = useState("");
   const previousDataRef = useRef({});
 
   const dataEntries = Object.values(marketData || {});
+
+  // Group by exchange
   const grouped = useMemo(() => {
     const g = {};
     dataEntries.forEach((row) => {
@@ -20,6 +23,7 @@ const DataGrid = ({ marketData }) => {
     return g;
   }, [dataEntries]);
 
+  // Determine columns dynamically
   const columnsByExchange = useMemo(() => {
     const colMap = {};
     Object.entries(grouped).forEach(([ex, rows]) => {
@@ -29,6 +33,7 @@ const DataGrid = ({ marketData }) => {
     return colMap;
   }, [grouped]);
 
+  // Highlight changed cells
   useEffect(() => {
     const newData = marketData || {};
     const oldData = previousDataRef.current;
@@ -54,8 +59,10 @@ const DataGrid = ({ marketData }) => {
       }
     });
     previousDataRef.current = { ...newData };
+    console.log("DataGrid received marketData:", marketData);
   }, [marketData]);
 
+  // Spot price detection
   const getSpotPrice = (rows, exchange) => {
     if (!rows || rows.length === 0) return null;
     const ex = (exchange || '').toLowerCase();
@@ -69,29 +76,24 @@ const DataGrid = ({ marketData }) => {
       return null;
     }
 
-    if (ex === 'binance') {
-      const spotBtc = rows.find(
-        (r) => (r?.type || '').toLowerCase() === 'spot' && (r.instrument || '').toLowerCase().startsWith('btcusdt')
+    if (ex === 'binance' || ex === 'bybit') {
+      // Spot first
+      const spot = rows.find((r) =>
+        (r?.type || '').toLowerCase() === 'spot' && (r.instrument || '').toLowerCase().startsWith('btcusdt')
       );
-      if (spotBtc) {
-        const val = parseFloat(spotBtc.mark_price ?? spotBtc.last_price);
+      if (spot) {
+        const val = parseFloat(spot.mark_price ?? spot.last_price);
         return Number.isFinite(val) ? val.toFixed(2) : null;
       }
-      
-      const futureBtc = rows.find(
-        (r) => (r?.type || '').toLowerCase() === 'future' && (r.instrument || '').toLowerCase() === 'btcusdt'
+
+      // Futures fallback
+      const fut = rows.find((r) =>
+        (r?.type || '').toLowerCase() === 'future' && (r.instrument || '').toLowerCase().startsWith('btcusdt')
       );
-      if (futureBtc) {
-        const val = parseFloat(futureBtc.mark_price ?? futureBtc.last_price);
+      if (fut) {
+        const val = parseFloat(fut.mark_price ?? fut.last_price);
         return Number.isFinite(val) ? val.toFixed(2) : null;
       }
-      
-      const btcusdt = rows.find((r) => (r.instrument || '').toLowerCase().startsWith('btcusdt'));
-      if (btcusdt) {
-        const val = parseFloat(btcusdt.mark_price ?? btcusdt.last_price);
-        return Number.isFinite(val) ? val.toFixed(2) : null;
-      }
-      return null;
     }
 
     return null;
@@ -154,16 +156,18 @@ const DataGrid = ({ marketData }) => {
       <div className="tables-grid">
         {Object.entries(grouped).map(([exchange, rows]) => {
           const columns = columnsByExchange[exchange] || [];
+
+          // Filter by search text
           const filtered = rows.filter((r) =>
             r.instrument?.toLowerCase().includes(filterText.toLowerCase())
           );
 
+          // Default sort by instrument
           filtered.sort((a, b) =>
-            String(a.instrument).localeCompare(String(b.instrument), "en", {
-              numeric: true,
-            })
+            String(a.instrument).localeCompare(String(b.instrument), "en", { numeric: true })
           );
 
+          // Apply configured column sorting
           const config = sortConfig[exchange];
           const sorted = [...filtered];
           if (config.key && columns.includes(config.key)) {
@@ -206,7 +210,7 @@ const DataGrid = ({ marketData }) => {
                     </tr>
                   </thead>
                   <tbody>
-                    {sorted.map((row, i) => {
+                    {sorted.map((row) => {
                       const rowKey = `${exchange}_${row.instrument}`;
                       return (
                         <tr key={rowKey}>

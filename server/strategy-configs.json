@@ -1,5 +1,5 @@
 {
-  "deribit_jelly_main": [
+  "deribit_all": [
     {
       "id": "table_0",
       "config": {
@@ -42,7 +42,7 @@
         "exchange": "deribit",
         "strategy": "Butterfly",
         "symbol": "BTC",
-        "optionExpiry": "6OCT25",
+        "optionExpiry": "7OCT25",
         "futureExpiry": "10OCT25",
         "strikeInterval": 1000,
         "gap": 1000,
@@ -62,6 +62,136 @@
         "symbol": "BTC",
         "optionExpiry": "10OCT25",
         "futureExpiry": "10OCT25",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    },
+    {
+      "id": "table_4",
+      "config": {
+        "exchange": "deribit",
+        "strategy": "Pulse_Butterfly",
+        "symbol": "BTC",
+        "optionExpiry": "10OCT25",
+        "futureExpiry": "10OCT25",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    }
+  ],
+  "binance_all": [
+    {
+      "id": "table_0",
+      "config": {
+        "exchange": "binance",
+        "strategy": "Jelly",
+        "symbol": "BTC",
+        "optionExpiry": "251008",
+        "futureExpiry": "251010",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    },
+    {
+      "id": "table_1",
+      "config": {
+        "exchange": "binance",
+        "strategy": "Synthetic",
+        "symbol": "BTC",
+        "optionExpiry": "251008",
+        "futureExpiry": "251007",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    },
+    {
+      "id": "table_2",
+      "config": {
+        "exchange": "binance",
+        "strategy": "Butterfly",
+        "symbol": "BTC",
+        "optionExpiry": "251008",
+        "futureExpiry": "251007",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    },
+    {
+      "id": "table_3",
+      "config": {
+        "exchange": "binance",
+        "strategy": "Ratio",
+        "symbol": "BTC",
+        "optionExpiry": "251008",
+        "futureExpiry": "251007",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    },
+    {
+      "id": "table_4",
+      "config": {
+        "exchange": "binance",
+        "strategy": "Pulse_Butterfly",
+        "symbol": "BTC",
+        "optionExpiry": "251008",
+        "futureExpiry": "251007",
+        "strikeInterval": 1000,
+        "gap": 1000,
+        "noPrtFolio": 10,
+        "ratio1": 1,
+        "ratio2": 2,
+        "strategyLegType": "1331",
+        "strikeMode": "auto",
+        "nearestStrike": ""
+      }
+    }
+  ],
+  "dummy": [
+    {
+      "id": "table_0",
+      "config": {
+        "exchange": "deribit",
+        "strategy": "C-F/F",
+        "symbol": "BTC",
+        "optionExpiry": "",
+        "futureExpiry": "",
         "strikeInterval": 1000,
         "gap": 1000,
         "noPrtFolio": 10,

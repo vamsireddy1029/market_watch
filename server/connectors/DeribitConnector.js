@@ -34,7 +34,6 @@ class DeribitConnector {
             this.fetchMetadata(config);
             resolve();
           } else {
-            // ✅ FIX: First subscribe to perpetual to get spot price
             this.subscribeToSpotFirst(config).then(resolve);
           }
         }, 500);
@@ -85,29 +84,18 @@ class DeribitConnector {
   }
 
   async fetchMetadata(config) {
-    console.log('📊 Fetching Deribit metadata...');
+    console.log('📊 Fetching Deribit metadata...', config);
 
     try {
       const expiriesSet = new Set();
+      const futureExpiriesSet = new Set();
+      const optionExpiriesSet = new Set();
       const strikesArr = [];
       const instrumentsObj = { options: [], futures: [], perpetual: [] };
 
-      const optionsRes = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
-        params: { currency: 'BTC', kind: 'option', expired: false }
-      });
-      const options = optionsRes.data.result || [];
+      const { instrumentType = 'all' } = config;
 
-      options.forEach(opt => {
-        const date = new Date(opt.expiration_timestamp);
-        const day = date.getDate();
-        const month = date.toLocaleString('en-US', { month: 'short' }).toUpperCase();
-        const year = String(date.getFullYear()).slice(2);
-        const dateStr = `${day}${month}${year}`;
-        expiriesSet.add(dateStr);
-        strikesArr.push(opt.strike);
-        instrumentsObj.options.push(opt.instrument_name);
-      });
-
+      // ✅ ALWAYS fetch futures to populate futureExpiries (needed for C-F/F)
       const futuresRes = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
         params: { currency: 'BTC', kind: 'future', expired: false }
       });
@@ -115,21 +103,56 @@ class DeribitConnector {
 
       futures.forEach(fut => {
         instrumentsObj.futures.push(fut.instrument_name);
+        if (fut.settlement_period !== 'perpetual') {
+          const parts = fut.instrument_name.split('-');
+          if (parts.length >= 2) {
+            const expiry = parts[1];
+            expiriesSet.add(expiry);
+            futureExpiriesSet.add(expiry);
+          }
+        } else {
+          instrumentsObj.perpetual.push(fut.instrument_name);
+        }
       });
 
-      const perpetuals = futures.filter(p => p.settlement_period === 'perpetual');
-      perpetuals.forEach(p => {
-        instrumentsObj.perpetual.push(p.instrument_name);
-      });
+      console.log(`✅ Deribit futures: ${futures.length}, futureExpiries: ${futureExpiriesSet.size}`);
+
+      // ✅ Fetch options if requested
+      if (instrumentType === 'option' || instrumentType === 'all') {
+        const optionsRes = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
+          params: { currency: 'BTC', kind: 'option', expired: false }
+        });
+        const options = optionsRes.data.result || [];
+
+        options.forEach(opt => {
+          const date = new Date(opt.expiration_timestamp);
+          const day = date.getDate();
+          const month = date.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+          const year = String(date.getFullYear()).slice(2);
+          const dateStr = `${day}${month}${year}`;
+          expiriesSet.add(dateStr);
+          optionExpiriesSet.add(dateStr);
+          strikesArr.push(opt.strike);
+          instrumentsObj.options.push(opt.instrument_name);
+        });
+
+        console.log(`✅ Deribit options: ${options.length}`);
+      }
 
       const metadata = {
         expiries: Array.from(expiriesSet).sort(),
-        strikes: { min: Math.min(...strikesArr), max: Math.max(...strikesArr) },
+        futureExpiries: Array.from(futureExpiriesSet).sort(),
+        optionExpiries: Array.from(optionExpiriesSet).sort(),
+        strikes: strikesArr.length > 0 ? { min: Math.min(...strikesArr), max: Math.max(...strikesArr) } : { min: 0, max: 0 },
         instruments: instrumentsObj
       };
 
       this.onMetadata('deribit', metadata);
-      console.log(`✅ Deribit: Options: ${options.length}, Futures: ${futures.length}, Perpetual: ${perpetuals.length}`);
+      console.log(`✅ Deribit metadata:`, {
+        totalExpiries: metadata.expiries.length,
+        futureExpiries: metadata.futureExpiries.length,
+        optionExpiries: metadata.optionExpiries.length
+      });
 
       return metadata;
 
@@ -145,7 +168,6 @@ class DeribitConnector {
     this.pendingConfig = config;
     this.spotPriceReceived = false;
     
-    // Subscribe to perpetual first
     this.send({
       jsonrpc: "2.0",
       id: 100,
@@ -153,7 +175,6 @@ class DeribitConnector {
       params: { channels: ['ticker.BTC-PERPETUAL.100ms'] }
     });
     
-    // Also subscribe to future if specified for Jelly strategy
     if (config.futureExpiry) {
       const futureSymbol = `BTC-${config.futureExpiry}`;
       console.log(`📊 Also subscribing to future: ${futureSymbol}`);
@@ -165,7 +186,6 @@ class DeribitConnector {
       });
     }
     
-    // Wait for spot price data (max 3 seconds)
     const startTime = Date.now();
     while (!this.spotPriceReceived && (Date.now() - startTime) < 3000) {
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -187,15 +207,55 @@ class DeribitConnector {
     console.log('🔔 Subscribe config received:', JSON.stringify(config, null, 2));
 
     try {
-      if (instrumentType === 'future') {
+      if (config.strategy && config.strategy.toLowerCase() === 'c-f/f') {
+  console.log('🎯 C-F/F Strategy detected - subscribing to futures');
+  
+  // Always subscribe to perpetual
+  channels.push('ticker.BTC-PERPETUAL.100ms');
+  console.log('📊 Added BTC-PERPETUAL');
+  
+  const res = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
+    params: { currency: 'BTC', kind: 'future', expired: false }
+  });
+  const futures = res.data?.result || [];
+  
+  const nonPerpetualFutures = futures.filter(f => 
+    f.settlement_period !== 'perpetual'
+  );
+  
+  // ✅ FIX: Check if specific expiry is requested
+  if (config.futureExpiry && config.futureExpiry.trim() !== '') {
+    // Subscribe to ONLY the selected expiry
+    const targetExpiry = config.futureExpiry.trim();
+    const matchedFuture = nonPerpetualFutures.find(f => 
+      f.instrument_name.includes(`-${targetExpiry}`)
+    );
+    
+    if (matchedFuture) {
+      channels.push(`ticker.${matchedFuture.instrument_name}.100ms`);
+      console.log(`✅ Added specific future: ${matchedFuture.instrument_name}`);
+    } else {
+      console.log(`⚠️ Future expiry ${targetExpiry} not found`);
+    }
+  } else {
+    // Subscribe to ALL futures (when "All Expiries" is selected)
+    nonPerpetualFutures.forEach(f => {
+      channels.push(`ticker.${f.instrument_name}.100ms`);
+    });
+    console.log(`✅ Added ${nonPerpetualFutures.length} futures (All Expiries mode)`);
+  }
+  
+  console.log(`✅ Total C-F/F channels: ${channels.length}`);
+}
+      else if (instrumentType === 'future') {
         const res = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
           params: { currency: 'BTC', kind: 'future', expired: false }
         });
         const futures = res.data?.result || [];
         futures.forEach(f => channels.push(`ticker.${f.instrument_name}.100ms`));
         console.log(`📈 Added ${futures.length} futures`);
-
-      } else if (instrumentType === 'option') {
+      } 
+      else if (instrumentType === 'option') {
         const res = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
           params: { currency: 'BTC', kind: 'option', expired: false }
         });
@@ -280,12 +340,26 @@ class DeribitConnector {
     console.log(`✅ Subscribed to ${this.subscribedChannels.size} channels`);
   }
 
+  unsubscribeFromInstrument(instrument) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const channel = `ticker.${instrument}.raw`;
+      this.ws.send(JSON.stringify({
+        method: 'public/unsubscribe',
+        params: {
+          channels: [channel]
+        },
+        jsonrpc: '2.0',
+        id: Date.now()
+      }));
+      console.log(`Unsubscribed from ${channel}`);
+    }
+  }
+
   handleMessage(message) {
     if (message.method === "subscription" && message.params?.data) {
       const data = message.params.data;
       const instrument = data.instrument_name;
 
-      // ✅ Mark that we received spot price
       if (instrument === 'BTC-PERPETUAL' && !this.spotPriceReceived) {
         this.spotPriceReceived = true;
         console.log(`✅ Spot price received: ${data.last_price}`);

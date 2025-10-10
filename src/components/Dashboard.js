@@ -11,7 +11,8 @@ const Dashboard = () => {
   const [marketData, setMarketData] = useState({});
   const [availableData, setAvailableData] = useState({
     deribit: { expiries: [], strikes: { min: 0, max: 0 }, instruments: {} },
-    binance: { expiries: [], strikes: { min: 0, max: 0 }, instruments: {} }
+    binance: { expiries: [], strikes: { min: 0, max: 0 }, instruments: {} },
+    bybit: { expiries: [], strikes: { min: 0, max: 0 }, instruments: {} }
   });
   const [config, setConfig] = useState({
     deribit: {
@@ -27,6 +28,13 @@ const Dashboard = () => {
       startStrike: '',
       gap: 1000,
       entryCount: 5
+    },
+    bybit: {
+      instrumentType: 'option',
+      expiry: '',
+      startStrike: '',
+      gap: 1000,
+      entryCount: 5
     }
   });
   const [appliedConfig, setAppliedConfig] = useState({});
@@ -36,10 +44,7 @@ const Dashboard = () => {
   const exchanges = [
     { id: 'deribit', name: 'Deribit BTC', color: 'bg-blue-500', available: true, type: 'crypto' },
     { id: 'binance', name: 'Binance BTC', color: 'bg-yellow-500', available: true, type: 'crypto' },
-    { id: 'nse_zerodha', name: 'NSE (Zerodha)', color: 'bg-green-500', available: false, type: 'indian' },
-    { id: 'nse_xts', name: 'NSE (XTS)', color: 'bg-emerald-500', available: false, type: 'indian' },
-    { id: 'bse_zerodha', name: 'BSE (Zerodha)', color: 'bg-red-500', available: false, type: 'indian' },
-    { id: 'bse_xts', name: 'BSE (XTS)', color: 'bg-rose-500', available: false, type: 'indian' }
+    { id: 'bybit', name: 'Bybit BTC', color: 'bg-purple-500', available: true, type: 'crypto' }
   ];
 
   const showNotification = (message, type = 'error') => {
@@ -164,6 +169,19 @@ const Dashboard = () => {
         }
       }
 
+      // ✅ Clear existing market data for these exchanges
+      setMarketData((prev) => {
+        const updated = { ...prev };
+        exchangesToSubmit.forEach(ex => {
+          Object.keys(updated).forEach((key) => {
+            if (key.startsWith(`${ex}_`)) {
+              delete updated[key];
+            }
+          });
+        });
+        return updated;
+      });
+
       const submitConfig = {};
       exchangesToSubmit.forEach(ex => {
         submitConfig[ex] = config[ex];
@@ -248,6 +266,16 @@ const Dashboard = () => {
       return false;
     }
     
+    if (ex === 'bybit') {
+      const isTypeSpot = (row?.type || '').toLowerCase() === 'spot';
+      const isTypeFuture = (row?.type || '').toLowerCase() === 'future';
+      
+      if (isTypeSpot && inst === 'BTCUSDT') return true;
+      if (isTypeFuture && inst === 'BTCUSDT') return true;
+      
+      return false;
+    }
+    
     return false;
   };
 
@@ -258,6 +286,7 @@ const Dashboard = () => {
     const row = marketData[key];
     const instrument = row?.instrument || '';
     
+    // ✅ Always include spot/perpetual reference prices
     if (isSpotReferenceRow(exchangeMatch, row)) {
       filtered[key] = row;
       return filtered;
@@ -265,6 +294,7 @@ const Dashboard = () => {
 
     const applied = appliedConfig[exchangeMatch];
 
+    // ✅ If no config applied yet, show everything
     if (!applied) {
       filtered[key] = row;
       return filtered;
@@ -272,54 +302,68 @@ const Dashboard = () => {
 
     let include = false;
     const type = applied.instrumentType;
-    const parts = instrument.split('-');
+    const upperInstrument = instrument.toUpperCase();
     
     if (type === 'option') {
-      const isOption = parts.length === 4;
-      
+      // ✅ Match Bybit: BTC-12OCT25-125000-C-USDT or Deribit: BTC-31MAY24-70000-C
+      const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2,4}-\d{3,6}-[CP](-USDT)?$/i.test(upperInstrument);
+
       if (isOption) {
         include = true;
-        
-        if (applied.expiry && include) {
-          include = instrument.includes(applied.expiry);
+
+        // ✅ Expiry filter (ONLY if specified)
+        if (applied.expiry && applied.expiry.trim()) {
+          const expiryNorm = applied.expiry.trim().toUpperCase();
+          const expiryPattern = expiryNorm.replace(/^\d{1,2}/, ''); // Remove leading digits
+          
+          // Match either full expiry or pattern
+          const hasExpiry = upperInstrument.includes(`-${expiryNorm}-`) || 
+                           upperInstrument.includes(`-${expiryPattern}-`);
+          
+          include = hasExpiry;
         }
-        
-        const start = parseInt(applied.startStrike);
-        const gap = parseInt(applied.gap);
-        const count = parseInt(applied.entryCount);
-        
-        if (include && !isNaN(start) && !isNaN(gap) && !isNaN(count) && gap > 0 && count > 0) {
-          const strike = parseInt(parts[2]);
-          let found = false;
-          for (let i = 0; i < count; i++) {
-            if (strike === start + i * gap) {
-              found = true;
-              break;
-            }
+
+        // ✅ Strike filtering (ONLY if startStrike is specified)
+        if (include && applied.startStrike && applied.startStrike.trim()) {
+          const start = parseInt(applied.startStrike);
+          const gap = parseInt(applied.gap || 1000);
+          const count = parseInt(applied.entryCount || 5);
+
+          const parts = upperInstrument.split('-');
+          const strikePart = parts.find(p => /^\d+$/.test(p));
+          const strike = parseInt(strikePart);
+
+          if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
+            const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
+            include = validStrikes.includes(strike);
           }
-          include = found;
         }
       }
-    } else if (type === 'future') {
+    } 
+    else if (type === 'future') {
+      // ✅ Match futures: BTCUSDT-28NOV25, BTCUSDT, BTC-31MAY24
       if (exchangeMatch === 'deribit') {
-        include = parts.length === 2 && parts[0] === 'BTC' && !instrument.includes('PERPETUAL');
+        const parts = upperInstrument.split('-');
+        include = parts.length === 2 && parts[0] === 'BTC' && !upperInstrument.includes('PERPETUAL');
       } else if (exchangeMatch === 'binance') {
         include = 
-          instrument === 'BTCUSDT' || 
-          /^BTCUSDT_\d{6}$/.test(instrument) ||
-          /^[A-Z]+USDT$/.test(instrument);
+          upperInstrument === 'BTCUSDT' || 
+          /^BTCUSDT_\d{6}$/.test(upperInstrument) ||
+          /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/.test(upperInstrument);
+      } else if (exchangeMatch === 'bybit') {
+        include = 
+          upperInstrument === 'BTCUSDT' || 
+          /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/.test(upperInstrument);
       }
-    } else if (type === 'spot') {
-      if (exchangeMatch === 'binance') {
-        include = /btcusdt/i.test(instrument) && /spot/i.test(row?.type);
-      } else {
-        include = /btcusdt/i.test(instrument) && /spot/i.test(row?.type);
-      }
+    } 
+    else if (type === 'spot') {
+      include = /btcusdt/i.test(instrument) && /spot/i.test(row?.type);
     }
     
     if (include) {
       filtered[key] = row;
     }
+    
     return filtered;
   }, {});
 

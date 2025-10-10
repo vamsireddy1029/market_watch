@@ -16,8 +16,9 @@ class BinanceConnector {
     this.pingInterval = null;
     this.config = null;
     this.spotPriceReceived = false;
-    this.currentSpotPrice = 0; // ✅ Store spot price here
+    this.currentSpotPrice = 0;
     this.pendingConfig = null;
+    this.pricePollingInterval = null;
   }
 
   async connect(config) {
@@ -49,7 +50,6 @@ class BinanceConnector {
             await this.fetchMetadata(config);
             resolve();
           } else {
-            // ✅ FIX: First get spot price, then subscribe to options
             await this.subscribeToSpotFirst(config);
             resolve();
           }
@@ -96,9 +96,8 @@ class BinanceConnector {
     
     this.pendingConfig = config;
     this.spotPriceReceived = false;
-    this.currentSpotPrice = 0; // ✅ Reset
+    this.currentSpotPrice = 0;
     
-    // Connect spot WebSocket to get current BTC price
     this.spotWs = new WebSocket('wss://stream.binance.com:9443/ws');
     this.spotWs.on('open', () => {
       console.log('✅ Spot reference connected');
@@ -116,7 +115,7 @@ class BinanceConnector {
         
         if (!this.spotPriceReceived) {
           this.spotPriceReceived = true;
-          this.currentSpotPrice = parseFloat(message.c || message.lastPrice || 0); // ✅ Store it
+          this.currentSpotPrice = parseFloat(message.c || message.lastPrice || 0);
           console.log(`✅ Binance spot price received: ${this.currentSpotPrice}`);
         }
         
@@ -126,86 +125,103 @@ class BinanceConnector {
     
     this.spotWs.on('error', () => {});
     
-    // Wait for spot price (max 3 seconds)
     const startTime = Date.now();
     while (!this.spotPriceReceived && (Date.now() - startTime) < 3000) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     
     if (this.spotPriceReceived) {
-      console.log('✅ Spot price received, now subscribing to options...');
+      console.log('✅ Spot price received, now subscribing to instruments...');
     } else {
-      console.log('⚠️ Timeout waiting for spot price, subscribing anyway...');
-      this.currentSpotPrice = 60000; // Fallback
+      console.log('⚠️ Timeout waiting for spot price, using fallback');
+      this.currentSpotPrice = 60000;
     }
     
     await this.subscribe(config);
   }
 
   async fetchMetadata(config) {
-    console.log('📊 Fetching Binance metadata...');
-    
+    console.log('📊 Fetching Binance metadata...', config);
+
     try {
-      const { instrumentType } = config;
-      
-      if (instrumentType === 'option') {
-        const res = await axios.get('https://eapi.binance.com/eapi/v1/exchangeInfo');
-        const options = (res.data.optionSymbols || [])
-          .filter(s => ['BTCUSDT', 'ETHUSDT'].includes(s.underlying));
+      const { instrumentType = 'all' } = config;
+
+      const optionExpiriesSet = new Set();
+      const futureExpiriesSet = new Set();
+      const expiriesSet = new Set();
+      const strikesArr = [];
+      const instrumentsObj = { options: [], futures: [], perpetual: [] };
+
+      // ✅ Fetch futures using REST API
+      const futuresUrl = 'https://fapi.binance.com/fapi/v1/exchangeInfo';
+      const futuresRes = await axios.get(futuresUrl);
+      const futuresData = futuresRes.data?.symbols || [];
+
+      futuresData.forEach(sym => {
+        if (sym.status !== 'TRADING') return;
         
-        const expiries = new Set();
-        const strikes = [];
-        
-        options.forEach(opt => {
-          const parts = opt.symbol.split('-');
-          if (parts[1]) expiries.add(parts[1]);
-          if (parts[2]) strikes.push(parseInt(parts[2]));
+        if (sym.contractType === 'PERPETUAL' && sym.symbol === 'BTCUSDT') {
+          instrumentsObj.perpetual.push(sym.symbol);
+        } else if (sym.symbol.startsWith('BTCUSDT_')) {
+          const parts = sym.symbol.split('_');
+          if (parts.length === 2) {
+            const expiry = parts[1]; // Format: YYMMDD
+            expiriesSet.add(expiry);
+            futureExpiriesSet.add(expiry);
+            instrumentsObj.futures.push(sym.symbol);
+          }
+        }
+      });
+
+      console.log(`✅ Binance futures: ${instrumentsObj.futures.length}, futureExpiries: ${futureExpiriesSet.size}`);
+
+      // ✅ Fetch options if requested
+      if (instrumentType === 'option' || instrumentType === 'all') {
+        const optionsUrl = 'https://eapi.binance.com/eapi/v1/exchangeInfo';
+        const optionsRes = await axios.get(optionsUrl);
+        const optionsData = optionsRes.data?.optionSymbols || [];
+
+        optionsData.forEach(opt => {
+          if (opt.underlying === 'BTCUSDT') {
+            const expiryDate = new Date(opt.expiryDate);
+            const yy = String(expiryDate.getFullYear()).slice(2);
+            const mm = String(expiryDate.getMonth() + 1).padStart(2, '0');
+            const dd = String(expiryDate.getDate()).padStart(2, '0');
+            const expiryStr = `${yy}${mm}${dd}`;
+
+            expiriesSet.add(expiryStr);
+            optionExpiriesSet.add(expiryStr);
+            strikesArr.push(parseFloat(opt.strikePrice));
+            instrumentsObj.options.push(opt.symbol);
+          }
         });
 
-        const metadata = {
-          expiries: Array.from(expiries).sort(),
-          strikes: { min: Math.min(...strikes), max: Math.max(...strikes) },
-          instruments: { options: options.map(o => o.symbol) }
-        };
-
-        this.onMetadata('binance', metadata);
-        console.log(`✅ Binance: ${options.length} options`);
-        
-        this.ws.send(JSON.stringify({
-          method: "SUBSCRIBE",
-          params: ['BTCUSDT@ticker'],
-          id: 1
-        }));
-        
-      } else if (instrumentType === 'future') {
-        const res = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo');
-        const futures = (res.data.symbols || [])
-          .filter(s => s.status === 'TRADING' && s.symbol.startsWith('BTCUSDT'));
-        
-        const metadata = {
-          instruments: { futures: futures.map(f => f.symbol) }
-        };
-        
-        this.onMetadata('binance', metadata);
-        console.log(`✅ Binance: ${futures.length} futures`);
-        
-      } else if (instrumentType === 'spot') {
-        const res = await axios.get('https://api.binance.com/api/v3/exchangeInfo');
-        const spot = (res.data.symbols || [])
-          .filter(s => s.status === 'TRADING' && s.symbol === 'BTCUSDT');
-        
-        const metadata = {
-          instruments: { spot: spot.map(s => s.symbol) }
-        };
-        
-        this.onMetadata('binance', metadata);
-        console.log(`✅ Binance: ${spot.length} spot`);
+        console.log(`✅ Binance options: ${optionsData.length}`);
       }
+
+      const metadata = {
+        expiries: Array.from(expiriesSet).sort(),
+        futureExpiries: Array.from(futureExpiriesSet).sort(),
+        optionExpiries: Array.from(optionExpiriesSet).sort(),
+        strikes: strikesArr.length > 0 
+          ? { min: Math.min(...strikesArr), max: Math.max(...strikesArr) } 
+          : { min: 0, max: 0 },
+        instruments: instrumentsObj
+      };
+
+      this.onMetadata('binance', metadata);
       
-      this.metadataTimer = setTimeout(() => this.disconnect(), 10000);
-      
+      console.log(`✅ Binance metadata:`, {
+        totalExpiries: metadata.expiries.length,
+        futureExpiries: metadata.futureExpiries.length,
+        optionExpiries: metadata.optionExpiries.length
+      });
+
+      return metadata;
+
     } catch (error) {
-      console.error('Metadata fetch failed:', error.message);
+      console.error('Binance metadata fetch failed:', error.message);
+      throw error;
     }
   }
 
@@ -217,23 +233,56 @@ class BinanceConnector {
       streams = ['btcusdt@ticker'];
       
     } else if (instrumentType === 'future') {
-      const res = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo');
-      const futures = (res.data.symbols || [])
-        .filter(s =>
-          s.status === 'TRADING' &&
-          s.symbol.startsWith('BTCUSDT')
-        )
-        .map(s => s.symbol);
+  console.log('🎯 Fetching Binance futures for C-F/F strategy...');
+  
+  const res = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo');
+  const allSymbols = res.data.symbols || [];
+  
+  // ✅ BTCUSDT is the perpetual (not in BTCUSDT_ format)
+  const perpetual = allSymbols.find(s => 
+    s.status === 'TRADING' && 
+    s.symbol === 'BTCUSDT' && 
+    s.contractType === 'PERPETUAL'
+  );
+  
+  const quarterlyFutures = allSymbols.filter(s =>
+    s.status === 'TRADING' &&
+    s.symbol.startsWith('BTCUSDT_')
+  );
+  
+  // ✅ FIX: Filter by futureExpiry if specified
+  let futuresList = [];
+  
+  if (perpetual) {
+    futuresList.push(perpetual.symbol);
+  }
+  
+  if (futureExpiry && futureExpiry.trim() !== '') {
+    // Subscribe to ONLY the selected expiry
+    const targetExpiry = futureExpiry.trim();
+    const matchedFuture = quarterlyFutures.find(f => 
+      f.symbol.endsWith(`_${targetExpiry}`)
+    );
+    
+    if (matchedFuture) {
+      futuresList.push(matchedFuture.symbol);
+      console.log(`✅ Added specific future: ${matchedFuture.symbol}`);
+    } else {
+      console.log(`⚠️ Future expiry ${targetExpiry} not found`);
+    }
+  } else {
+    // Subscribe to ALL futures (when "All Expiries" is selected)
+    futuresList.push(...quarterlyFutures.map(f => f.symbol));
+    console.log(`✅ Added ${quarterlyFutures.length} futures (All Expiries mode)`);
+  }
 
-      const metadata = {
-        instruments: { futures }
-      };
+  console.log(`✅ Total C-F/F futures: ${futuresList.length}`);
 
-      this.onMetadata('binance', metadata);
-      console.log(`✅ Binance: ${futures.length} futures`);
-
-      streams = futures.map(symbol => `${symbol.toLowerCase()}@ticker`);
-    } 
+  // ✅ Start polling REST API for bid/ask prices
+  this.startFuturesPricePolling(futuresList);
+  
+  streams = futuresList.map(symbol => `${symbol.toLowerCase()}@ticker`);
+}
     else if (instrumentType === 'option') {
       try {
         const res = await axios.get('https://eapi.binance.com/eapi/v1/exchangeInfo');
@@ -244,9 +293,8 @@ class BinanceConnector {
           options = options.filter(s => s.symbol.includes(`-${expiry}-`));
         }
 
-        // ✅ Calculate strikes from actual stored spot price
         if (strikeInterval && noPrtFolio) {
-          const spotPrice = this.currentSpotPrice || 60000; // Use stored spot price
+          const spotPrice = this.currentSpotPrice || 60000;
           
           const interval = parseInt(strikeInterval);
           const nearestStrike = Math.round(spotPrice / interval) * interval;
@@ -257,23 +305,21 @@ class BinanceConnector {
             allowedStrikes.add(nearestStrike + (i * interval));
           }
           
-          console.log(`🎯 Binance calculated strikes around ${spotPrice}: Nearest=${nearestStrike}, Range=[${Math.min(...allowedStrikes)} to ${Math.max(...allowedStrikes)}]`);
-          console.log(`🎯 First 5 strikes: [${Array.from(allowedStrikes).slice(0, 5).join(', ')}]`);
+          console.log(`🎯 Binance strikes around ${spotPrice}: Nearest=${nearestStrike}`);
           
           options = options.filter(s => {
             const parts = s.symbol.split('-');
             return allowedStrikes.has(parseInt(parts[2]));
           });
           
-          console.log(`🎯 After strike filter: ${options.length} options matched`);
+          console.log(`🎯 After strike filter: ${options.length} options`);
         }
 
         streams = options.map(s => `${s.symbol}@ticker`);
         
-        // Connect futures for Jelly/Synthetic
         const strategyLower = (strategy || '').toLowerCase();
         if (strategyLower === 'jelly' || strategyLower === 'synthetic') {
-          console.log(`🎯 Jelly/Synthetic detected, connecting futures for expiry: ${futureExpiry}`);
+          console.log(`🎯 Jelly/Synthetic detected, connecting futures`);
           this.connectFuturesForJelly(futureExpiry);
         }
         
@@ -299,84 +345,99 @@ class BinanceConnector {
     console.log(`📊 Subscribed to ${streams.length} Binance ${instrumentType}s`);
   }
 
-  connectFuturesForJelly(futureExpiry) {
-    this.futuresWs = new WebSocket('wss://fstream.binance.com/ws');
-    this.futuresWs.on('open', () => {
-      console.log('✅ Futures connected for Jelly/Synthetic');
-      
-      let futureSymbol = 'btcusdt@ticker';
-      
-      if (futureExpiry && futureExpiry.length === 6) {
-        futureSymbol = `btcusdt_${futureExpiry}@ticker`;
-        console.log(`📈 Subscribing to quarterly future: ${futureSymbol}`);
-      }
-      
-      this.futuresWs.send(JSON.stringify({
-        method: 'SUBSCRIBE',
-        params: [futureSymbol],
-        id: 1001,
-      }));
-    });
+  // ✅ FIX: Normalize ALL keys to lowercase
+  startFuturesPricePolling(futuresList) {
+    console.log('📊 Starting futures price polling via REST API...');
     
-    this.futuresWs.on('message', (data) => {
+    const pollPrices = async () => {
       try {
-        const message = JSON.parse(data);
-        if (message.result === null || message.id) return;
-        
-        const symbol = message.s || message.symbol;
-        if (symbol) {
-          const instrumentType = 'future';
+        for (const symbol of futuresList) {
+          const url = `https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol=${symbol}`;
+          const res = await axios.get(url);
           
-          const lastPrice = parseFloat(message.c || message.lastPrice || message.lp || 0);
-          const bidPrice = parseFloat(message.b || message.bo || 0);
-          const askPrice = parseFloat(message.a || message.ao || 0);
-          const markPrice = parseFloat(message.mp || message.c || 0);
-          
-          const converted = {
-            exchange: 'binance',
-            type: instrumentType,
-            instrument: symbol,
-            last_price: lastPrice.toFixed(2),
-            best_bid_price: bidPrice.toFixed(2),
-            best_ask_price: askPrice.toFixed(2),
-            mark_price: markPrice.toFixed(2),
-            min_price: parseFloat(message.l || 0).toFixed(2),
-            max_price: parseFloat(message.h || 0).toFixed(2),
-            volume: parseFloat(message.v || message.V || 0).toFixed(2)
-          };
-          
-          this.onData(`binance_${symbol}`, converted);
+          if (res.data) {
+            const data = res.data;
+            
+            const converted = {
+              exchange: 'binance',
+              type: 'future',
+              instrument: symbol,
+              last_price: parseFloat(data.bidPrice || 0).toFixed(2),
+              best_bid_price: parseFloat(data.bidPrice || 0).toFixed(2),
+              best_ask_price: parseFloat(data.askPrice || 0).toFixed(2),
+              mark_price: parseFloat(data.bidPrice || 0).toFixed(2),
+              min_price: '0',
+              max_price: '0',
+              volume: '0'
+            };
+            
+            // ✅ KEY FIX: Always use lowercase for consistency
+            // For BTCUSDT (perpetual) -> binance_btcusdt
+            // For BTCUSDT_251226 (future) -> binance_btcusdt_251226
+            const normalizedKey = `binance_${symbol.toLowerCase()}`;
+            
+            console.log(`✅ Storing future data: ${normalizedKey}`, {
+              bid: data.bidPrice,
+              ask: data.askPrice
+            });
+            
+            this.onData(normalizedKey, converted);
+          }
         }
-      } catch (e) {
-        console.error('Futures message error:', e);
+      } catch (error) {
+        console.error('❌ Futures price polling error:', error.message);
       }
-    });
-    this.futuresWs.on('error', (err) => {
-      console.error('Futures WS error:', err);
-    });
+    };
+    
+    // Poll immediately
+    pollPrices();
+    
+    // Then poll every 500ms
+    this.pricePollingInterval = setInterval(pollPrices, 500);
+    console.log('✅ Futures price polling started (500ms interval)');
+  }
+
+  connectFuturesForJelly(futureExpiry) {
+    console.log('🎯 Connecting futures for Jelly/Synthetic...');
+    
+    const futuresList = ['BTCUSDT'];
+    if (futureExpiry && futureExpiry.length === 6) {
+      futuresList.push(`BTCUSDT_${futureExpiry}`);
+    }
+    
+    this.startFuturesPricePolling(futuresList);
+  }
+
+  unsubscribeFromInstrument(instrument) {
+    const symbol = instrument.toLowerCase();
+    const streamName = `${symbol}@ticker`;
+    
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({
+        method: 'UNSUBSCRIBE',
+        params: [streamName],
+        id: Date.now()
+      }));
+      console.log(`Unsubscribed from ${streamName}`);
+    }
   }
 
   handleMessage(message, type) {
     if (message.result === null || message.id) return;
-
     const symbol = message.s || message.symbol;
     if (!symbol) return;
-
     const isOption = symbol.includes('-');
     let instrumentType = type;
-    
     if (!type) {
       instrumentType = isOption ? 'option' : 'future';
     }
-
     const lastPrice = parseFloat(message.c || message.lastPrice || message.lp || 0);
-    const bidPrice = parseFloat(message.b || message.bo || 0);
-    const askPrice = parseFloat(message.a || message.ao || 0);
+    const bidPrice = parseFloat(message.bo || message.b || 0);
+    const askPrice = parseFloat(message.ao || message.a || 0);
     const markPrice = parseFloat(message.mp || message.c || 0);
     const lowPrice = parseFloat(message.l || message.lowPrice || 0);
     const highPrice = parseFloat(message.h || message.highPrice || 0);
-    const volume = parseFloat(message.v || message.V || 0);
-
+    const volume = parseFloat(message.V || message.v || 0);
     const converted = {
       exchange: 'binance',
       type: instrumentType,
@@ -389,10 +450,8 @@ class BinanceConnector {
       max_price: highPrice.toFixed(2),
       volume: volume.toFixed(2)
     };
-
-    this.onData(`binance_${symbol}`, converted);
+    this.onData(`binance_${symbol.toLowerCase()}`, converted);
   }
-
   cleanup() {
     if (this.pingInterval) {
       clearInterval(this.pingInterval);
@@ -402,12 +461,16 @@ class BinanceConnector {
       clearTimeout(this.metadataTimer);
       this.metadataTimer = null;
     }
+    if (this.pricePollingInterval) {
+      clearInterval(this.pricePollingInterval);
+      this.pricePollingInterval = null;
+      console.log('🛑 Stopped futures price polling');
+    }
     this.subscribedStreams.clear();
     this.spotPriceReceived = false;
-    this.currentSpotPrice = 0; // ✅ Reset
+    this.currentSpotPrice = 0;
     this.pendingConfig = null;
   }
-
   disconnect() {
     this.isExplicitDisconnect = true;
     this.cleanup();

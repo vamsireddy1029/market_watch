@@ -282,24 +282,42 @@
   transform: translateY(-1px);
 }
 
-.submit-btn {
-  background: #036b26;
-  color: white;
-}
-
-.submit-btn:hover {
-  background: #04b94a;
-  transform: translateY(-1px);
-}
-
 .action-buttons {
   display: flex;
-  gap: 10px;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  margin-top: 16px;
 }
 
-.action-buttons .btn {
+.action-buttons button {
   flex: 1;
+  height: 48px;
+  font-size: 16px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  color: #fff;
+  font-weight: 600;
 }
+
+.action-buttons .submit-btnn {
+  background-color: #166534; /* dark green */
+}
+
+.action-buttons .submit-btnn:hover {
+  background-color: #15803d; /* hover green */
+}
+
+.action-buttons .exit-btnn {
+  background-color: #b91c1c; /* red */
+}
+
+.action-buttons .exit-btnn:hover {
+  background-color: #dc2626; /* hover red */
+}
+
 
 @media (max-width: 768px) {
   .exchange-row {

@@ -192,21 +192,22 @@ const ExchangeSelector = ({
         )}
 
         {exchangeConfig.instrumentType === "future" && (
-          <div className="action-buttons">
-            <button
-              className="btn btn-start submit-btn"
-              onClick={() => onSubmit(exchangeId)}
-            >
-              Submit
-            </button>
-            <button
-              className="btn btn-stop exit-btn"
-              onClick={() => onExit(exchangeId)}
-            >
-              Exit
-            </button>
-          </div>
-        )}
+  <div className="action-buttons">
+    <button
+      className="submit-btnn"
+      onClick={() => onSubmit(exchangeId)}
+    >
+      Submit
+    </button>
+    <button
+      className="exit-btnn"
+      onClick={() => onExit(exchangeId)}
+    >
+      Exit
+    </button>
+  </div>
+)}
+
       </div>
     );
   };

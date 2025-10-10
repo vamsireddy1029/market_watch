@@ -10,8 +10,14 @@ const StrategyDashboard = () => {
   const [selectedConfig, setSelectedConfig] = useState('');
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [configName, setConfigName] = useState('');
-  const [storageMode, setStorageMode] = useState('browser'); // 'browser' or 'backend'
+  const [storageMode, setStorageMode] = useState('browser');
   const wsRef = useRef(null);
+  
+  const [tableFilters, setTableFilters] = useState({});
+  const [showFilterMenu, setShowFilterMenu] = useState({ tableId: null, column: null, position: null });
+  
+  const [showCFFDialog, setShowCFFDialog] = useState(false);
+  const [cffDialogData, setCffDialogData] = useState({ tableId: null, rowIndex: null, exchange: '', fut1Expiry: '',fut2Expiry: ''});
   
   const params = new URLSearchParams(window.location.search);
   const selectedExList = (params.get('selected') || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
@@ -23,7 +29,8 @@ const StrategyDashboard = () => {
     strategy: '',
     symbol: 'BTC',
     optionExpiry: '',
-    futureExpiry: '',
+    fut1Expiry: 'all',  
+    fut2Expiry: 'all',  
     strikeInterval: '1000',
     gap: '1000',
     noPrtFolio: '10',
@@ -36,10 +43,430 @@ const StrategyDashboard = () => {
 
   const [availableData, setAvailableData] = useState({
     deribit: { expiries: [], strikes: { min: 0, max: 0 }, instruments: [] },
-    binance: { expiries: [], strikes: { min: 0, max: 0 }, instruments: [] }
+    binance: { expiries: [], strikes: { min: 0, max: 0 }, instruments: [] },
+    bybit: { expiries: [], strikes: { min: 0, max: 0 }, instruments: {} }
   });
   const [limitExchanges] = useState(selectedExList);
   const [isLoadingExpiries, setIsLoadingExpiries] = useState(false);
+
+  // Parse expiry date to sortable format
+  const parseExpiryDate = (expiry) => {
+    if (!expiry) return new Date(0);
+    
+    // Handle Binance format: YYMMDD (e.g., 241227)
+    if (/^\d{6}$/.test(expiry)) {
+      const year = 2000 + parseInt(expiry.substring(0, 2));
+      const month = parseInt(expiry.substring(2, 4)) - 1;
+      const day = parseInt(expiry.substring(4, 6));
+      return new Date(year, month, day);
+    }
+    
+    // Handle Deribit format: DDMMMYY (e.g., 10OCT25)
+    const match = expiry.match(/^(\d{1,2})([A-Z]{3})(\d{2})$/);
+    if (match) {
+      const day = parseInt(match[1]);
+      const monthMap = {
+        JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
+        JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11
+      };
+      const month = monthMap[match[2]];
+      const year = 2000 + parseInt(match[3]);
+      return new Date(year, month, day);
+    }
+    
+    return new Date(0);
+  };
+
+  // Sort data by expiry date
+  const sortByExpiry = (data) => {
+    return [...data].sort((a, b) => {
+      const dateA = parseExpiryDate(a.expiry);
+      const dateB = parseExpiryDate(b.expiry);
+      return dateA - dateB;
+    });
+  };
+
+  const getUniqueValues = (data, column) => {
+    const values = new Set();
+    data.forEach(row => {
+      const val = row[column];
+      if (val !== undefined && val !== null && val !== '') {
+        values.add(val);
+      }
+    });
+    return Array.from(values).sort((a, b) => {
+      if (typeof a === 'number' && typeof b === 'number') return a - b;
+      return String(a).localeCompare(String(b));
+    });
+  };
+
+  const toggleFilter = (tableId, column, value) => {
+    setTableFilters(prev => {
+      const key = `${tableId}_${column}`;
+      const current = prev[key] || { selectAll: true, values: new Set() };
+      const newValues = new Set(current.values);
+      
+      if (newValues.has(value)) {
+        newValues.delete(value);
+      } else {
+        newValues.add(value);
+      }
+      
+      return {
+        ...prev,
+        [key]: {
+          selectAll: false,
+          values: newValues
+        }
+      };
+    });
+  };
+
+  const toggleSelectAll = (tableId, column, allValues) => {
+    setTableFilters(prev => {
+      const key = `${tableId}_${column}`;
+      const current = prev[key] || { selectAll: true, values: new Set() };
+      
+      if (current.selectAll || current.values.size === allValues.length) {
+        return {
+          ...prev,
+          [key]: { selectAll: false, values: new Set() }
+        };
+      } else {
+        return {
+          ...prev,
+          [key]: { selectAll: true, values: new Set(allValues) }
+        };
+      }
+    });
+  };
+
+  const clearFilter = (tableId, column) => {
+    setTableFilters(prev => {
+      const newFilters = { ...prev };
+      delete newFilters[`${tableId}_${column}`];
+      return newFilters;
+    });
+    setShowFilterMenu({ tableId: null, column: null, position: null });
+  };
+
+  const applyFilters = (data, tableId) => {
+    let filtered = [...data];
+    
+    Object.keys(tableFilters).forEach(key => {
+      if (!key.startsWith(`${tableId}_`)) return;
+      
+      const column = key.replace(`${tableId}_`, '');
+      const filter = tableFilters[key];
+      
+      if (!filter.selectAll && filter.values.size > 0) {
+        filtered = filtered.filter(row => filter.values.has(row[column]));
+      }
+    });
+    
+    return filtered;
+  };
+
+  const FilterDropdown = ({ tableId, column, data, position }) => {
+    const uniqueValues = getUniqueValues(data, column);
+    const key = `${tableId}_${column}`;
+    const currentFilter = tableFilters[key] || { selectAll: true, values: new Set(uniqueValues) };
+    
+    return (
+      <div 
+        onClick={e => e.stopPropagation()}
+        style={{
+          position: 'fixed',
+          top: position.top,
+          left: position.left,
+          background: 'white',
+          border: '1px solid #ddd',
+          borderRadius: '4px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+          minWidth: '200px',
+          maxHeight: '400px',
+          overflowY: 'auto',
+          zIndex: 10000,
+          fontSize: '12px'
+        }}
+      >
+        <div style={{ padding: '8px', borderBottom: '1px solid #eee', background: '#f8f9fa', fontWeight: 'bold' }}>
+          Filter: {column}
+        </div>
+        
+        <div style={{ padding: '8px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', padding: '4px', cursor: 'pointer', userSelect: 'none' }}>
+            <input 
+              type="checkbox" 
+              checked={currentFilter.selectAll || currentFilter.values.size === uniqueValues.length}
+              onChange={() => toggleSelectAll(tableId, column, uniqueValues)}
+              style={{ marginRight: '8px' }}
+            />
+            <strong>(Select All)</strong>
+          </label>
+          
+          <div style={{ maxHeight: '250px', overflowY: 'auto', marginTop: '4px' }}>
+            {uniqueValues.map(value => (
+              <label 
+                key={value} 
+                style={{ display: 'flex', alignItems: 'center', padding: '4px', cursor: 'pointer', userSelect: 'none' }}
+              >
+                <input 
+                  type="checkbox" 
+                  checked={currentFilter.values.has(value)}
+                  onChange={() => toggleFilter(tableId, column, value)}
+                  style={{ marginRight: '8px' }}
+                />
+                {value}
+              </label>
+            ))}
+          </div>
+        </div>
+        
+        <div style={{ padding: '8px', borderTop: '1px solid #eee', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+          <button
+            onClick={() => clearFilter(tableId, column)}
+            style={{ padding: '6px 12px', background: '#e0e0e0', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '11px' }}
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => setShowFilterMenu({ tableId: null, column: null, position: null })}
+            style={{ padding: '6px 12px', background: '#3498db', color: 'white', border: 'none', borderRadius: '3px', cursor: 'pointer', fontSize: '11px' }}
+          >
+            OK
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const removeRow = async (tableId, rowData) => {
+  try {
+    console.log('🗑️ Remove row called:', { tableId, rowData });
+    const response = await fetch('http://localhost:8080/api/strategy/cff/remove-row', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tableId,
+        exchange: rowData.exchange,
+        fut1Expiry: rowData.fut1, 
+        fut2Expiry: rowData.fut2   
+      })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      setTables(prevTables => {
+        const newTables = [...prevTables];
+        const tableIndex = newTables.findIndex(t => t.id === tableId);
+        if (tableIndex !== -1) {
+          newTables[tableIndex] = { 
+            ...newTables[tableIndex], 
+            data: result.data || [],
+            config: {
+              ...newTables[tableIndex].config,
+              selectedFutures: result.selectedFutures || []
+            }
+          };
+        }
+        return newTables;
+      });
+      
+      console.log('✅ Row removed successfully');
+    } else {
+      alert('Failed to remove row: ' + (result.error || 'Unknown error'));
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Remove row error:', error);
+    alert('Failed to remove row: ' + error.message);
+    return { success: false, error: error.message };
+  }
+};
+
+  
+const handleAddCFFRow = async () => {
+  const { tableId, exchange, fut1Expiry, fut2Expiry } = cffDialogData;
+  
+  if (!exchange || !fut1Expiry || !fut2Expiry) {
+    alert('Please select exchange, fut1, and fut2 expiries');
+    return;
+  }
+  
+  setShowCFFDialog(false);
+  
+  try {
+    const response = await fetch('http://localhost:8080/api/strategy/cff/add-row', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        tableId, 
+        exchange: exchange.toLowerCase(), 
+        fut1Expiry,  // ✅ Send both expiries
+        fut2Expiry,
+        insertAfterIndex: cffDialogData.rowIndex
+      })
+    });
+
+    const result = await response.json();
+    
+    if (result.success) {
+      setTables(prevTables => {
+        const newTables = [...prevTables];
+        const tableIndex = newTables.findIndex(t => t.id === tableId);
+        if (tableIndex !== -1) {
+          newTables[tableIndex] = {
+            ...newTables[tableIndex],
+            config: {
+              ...newTables[tableIndex].config,
+              selectedFutures: result.selectedFutures || []
+            },
+            data: result.data || []
+          };
+        }
+        return newTables;
+      });
+    }
+  } catch (error) {
+    console.error('Add C-F/F row error:', error);
+    alert('Failed to add row: ' + error.message);
+  }
+};
+  const renderTable = (table) => {
+    if (table.isLoading) {
+      return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>Loading strategy data...</div>;
+    }
+
+    if (!table.data || table.data.length === 0) {
+      return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>No data available. Configure strategy settings.</div>;
+    }
+
+    const isCFF = table.config.strategy === 'C-F/F';
+  
+  let displayData = table.data;
+  const filteredData = applyFilters(displayData, table.id);
+  
+    // For C-F/F, add exchange column
+    const headers = isCFF && filteredData.length > 0 && !Object.keys(filteredData[0]).includes('exchange')
+      ? ['exchange', ...Object.keys(filteredData[0])]
+      : Object.keys(filteredData[0] || {});
+
+    return (
+      <div style={{ position: 'relative' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+          <thead>
+  <tr style={{ background: '#f8f9fa' }}>
+    {headers.map(header => (
+      <th key={header} style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#f8f9fa', zIndex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+          <span>{header}</span>
+          <button
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              setShowFilterMenu({ 
+                tableId: table.id, 
+                column: header,
+                position: { top: rect.bottom + 5, left: rect.left }
+              });
+            }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px', color: '#666' }}
+          >
+            ▼
+          </button>
+        </div>
+      </th>
+    ))}
+    {isCFF && (
+      <th style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', width: '100px' }}>
+        <button
+         
+          style={{
+            padding: '4px 8px',
+            background: '#27ae60',
+            color: 'white',
+            border: 'none'
+          }}
+        >
+          Actions
+        </button>
+      </th>
+    )}
+  </tr>
+</thead>
+          <tbody>
+            {filteredData.map((row, idx) => (
+              <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f9f9f9' }}>
+                {headers.map(header => {
+                  let val = row[header];
+                  let style = { padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' };
+                  
+                  if (typeof val === 'number') {
+                    val = val.toFixed(2);
+                    if (parseFloat(val) > 0) style.color = '#27ae60';
+                    else if (parseFloat(val) < 0) style.color = '#e74c3c';
+                  }
+                  
+                  return <td key={header} style={style}>{val || '-'}</td>;
+                })}
+                {isCFF && (
+  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+    <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+      <button 
+        onClick={(e) => {
+          e.stopPropagation();
+          if (window.confirm(`Remove row for ${row.expiry}?`)) {
+            removeRow(table.id, row);
+          }
+        }}
+        style={{
+          padding: '3px 6px',
+          background: '#e74c3c',
+          color: 'white',
+          border: 'none',
+          borderRadius: '3px',
+          cursor: 'pointer',
+          fontSize: '10px'
+        }}
+        title="Remove this row"
+      >
+        ❌
+      </button>
+      <button 
+        onClick={() => {
+            setActiveTableIndex(tables.findIndex(t => t.id === table.id));
+            setCffDialogData({
+              tableId: table.id,
+              exchange: table.config.exchange || initialExchange,
+              futureExpiry: ''
+            });
+            setShowCFFDialog(true);
+          }}
+        style={{
+          padding: '3px 6px',
+          background: '#27ae60',
+          color: 'white',
+          border: 'none',
+          borderRadius: '3px',
+          cursor: 'pointer',
+          fontSize: '10px'
+        }}
+        title="Add row after this"
+      >
+        ➕
+      </button>
+    </div>
+  </td>
+)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
   const loadSavedConfigs = async () => {
     try {
@@ -48,17 +475,16 @@ const StrategyDashboard = () => {
         const result = await response.json();
         if (result.success) {
           setSavedConfigs(result.configs || {});
-        } else {
-          console.error('Failed to load backend configs:', result.error);
-          setSavedConfigs({});
         }
       } else {
-        const saved = JSON.parse(window.localStorage.getItem('namedStrategyConfigs') || '{}');
-        setSavedConfigs(saved);
+        // Load from browser storage
+        const stored = window.localStorage.getItem('strategy-configs');
+        if (stored) {
+          setSavedConfigs(JSON.parse(stored));
+        }
       }
     } catch (error) {
       console.error('Failed to load configs:', error);
-      setSavedConfigs({});
     }
   };
 
@@ -93,21 +519,17 @@ const StrategyDashboard = () => {
           await loadSavedConfigs();
           setShowSaveDialog(false);
           setConfigName('');
-          alert(`Configuration "${configName.trim()}" saved to backend successfully!`);
-        } else {
-          alert('Failed to save configuration: ' + (result.error || 'Unknown error'));
+          alert(`Configuration "${configName.trim()}" saved successfully!`);
         }
       } else {
-        const newConfigs = {
-          ...savedConfigs,
-          [configName.trim()]: configToSave
-        };
-
-        window.localStorage.setItem('namedStrategyConfigs', JSON.stringify(newConfigs));
-        setSavedConfigs(newConfigs);
+        // Save to browser storage
+        const configs = { ...savedConfigs };
+        configs[configName.trim()] = configToSave;
+        window.localStorage.setItem('strategy-configs', JSON.stringify(configs));
+        setSavedConfigs(configs);
         setShowSaveDialog(false);
         setConfigName('');
-        alert(`Configuration "${configName.trim()}" saved to browser successfully!`);
+        alert(`Configuration "${configName.trim()}" saved to browser!`);
       }
     } catch (error) {
       console.error('Failed to save configuration:', error);
@@ -116,89 +538,74 @@ const StrategyDashboard = () => {
   };
 
   const loadConfig = (name) => {
-    if (!name) return;
-    
-    const config = savedConfigs[name];
-    if (!config) return;
+  if (!name) return;
+  
+  const config = savedConfigs[name];
+  if (!config) return;
 
-    const loadedTables = config.map(c => ({
-      ...c,
-      data: [],
-      liveData: null,
-      isLoading: true 
-    }));
-    
-    setTables(loadedTables);
-    setTableCounter(config.length);
-    setSelectedConfig(name);
-    
-    console.log(`📦 Loading ${config.length} strategies...`);
-    
-    setTimeout(async () => {
-      for (let i = 0; i < config.length; i++) {
-        const table = loadedTables[i];
-        console.log(`🔄 Starting subscription for ${table.id}...`);
+  const loadedTables = config.map(c => ({
+    ...c,
+    data: [],
+    liveData: null,
+    isLoading: true 
+  }));
+  
+  setTables(loadedTables);
+  setTableCounter(config.length);
+  setSelectedConfig(name);
+  
+  setTimeout(async () => {
+    for (let i = 0; i < config.length; i++) {
+      const table = loadedTables[i];
+      
+      try {
+        const response = await fetch('http://localhost:8080/api/strategy/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            tableId: table.id, 
+            config: table.config 
+          })
+        });
+
+        const result = await response.json();
         
-        try {
-          const response = await fetch('http://localhost:8080/api/strategy/add', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              tableId: table.id, 
-              config: table.config 
-            })
-          });
-
-          const result = await response.json();
-          
-          if (result.success) {
-            setTables(prevTables => {
-              const newTables = [...prevTables];
-              const tableIndex = newTables.findIndex(t => t.id === table.id);
-              if (tableIndex !== -1) {
-                newTables[tableIndex] = {
-                  ...newTables[tableIndex],
-                  data: result.data?.data || [],
-                  liveData: result.data ? {
-                    ltp: parseFloat(result.data.spotPrice),
-                    timestamp: new Date().toLocaleTimeString()
-                  } : null,
-                  isLoading: false
-                };
-              }
-              return newTables;
-            });
-            console.log(`✅ ${table.id} loaded successfully`);
-          } else {
-            console.error(`❌ Failed to load ${table.id}:`, result.error);
-            setTables(prevTables => {
-              const newTables = [...prevTables];
-              const tableIndex = newTables.findIndex(t => t.id === table.id);
-              if (tableIndex !== -1) {
-                newTables[tableIndex].isLoading = false;
-              }
-              return newTables;
-            });
-          }
-        } catch (error) {
-          console.error(`❌ Error loading ${table.id}:`, error);
+        if (result.success) {
           setTables(prevTables => {
             const newTables = [...prevTables];
             const tableIndex = newTables.findIndex(t => t.id === table.id);
             if (tableIndex !== -1) {
-              newTables[tableIndex].isLoading = false;
+              const data = result.data?.data || [];
+              
+              // ✅ FIX: Only sort if C-F/F in "All Expiries" mode
+              const isCFF = table.config.strategy === 'C-F/F';
+              const isCustomMode = table.config.selectedFutures !== undefined;
+              const processedData = (isCFF && !isCustomMode) ? sortByExpiry(data) : data;
+              
+              newTables[tableIndex] = {
+                ...newTables[tableIndex],
+                data: processedData,
+                liveData: result.data ? {
+                  ltp: parseFloat(result.data.spotPrice),
+                  timestamp: new Date().toLocaleTimeString()
+                } : null,
+                isLoading: false
+              };
             }
             return newTables;
           });
         }
-        if (i < config.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
+      } catch (error) {
+        console.error(`Error loading ${table.id}:`, error);
       }
-      
-      alert(`Configuration "${name}" loaded successfully!`);
-    }, 100);
-  };
+      if (i < config.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    alert(`Configuration "${name}" loaded successfully!`);
+  }, 100);
+};
 
   const deleteConfig = async () => {
     if (!selectedConfig) {
@@ -223,21 +630,18 @@ const StrategyDashboard = () => {
           await loadSavedConfigs();
           setSelectedConfig('');
           alert(`Configuration "${selectedConfig}" deleted successfully!`);
-        } else {
-          alert('Failed to delete configuration: ' + (result.error || 'Unknown error'));
         }
       } else {
-        const newConfigs = { ...savedConfigs };
-        delete newConfigs[selectedConfig];
-        
-        window.localStorage.setItem('namedStrategyConfigs', JSON.stringify(newConfigs));
-        setSavedConfigs(newConfigs);
+        // Delete from browser storage
+        const configs = { ...savedConfigs };
+        delete configs[selectedConfig];
+        window.localStorage.setItem('strategy-configs', JSON.stringify(configs));
+        setSavedConfigs(configs);
         setSelectedConfig('');
-        alert(`Configuration "${selectedConfig}" deleted successfully!`);
+        alert(`Configuration "${selectedConfig}" deleted from browser!`);
       }
     } catch (error) {
       console.error('Failed to delete configuration:', error);
-      alert('Failed to delete configuration: ' + error.message);
     }
   };
 
@@ -250,51 +654,56 @@ const StrategyDashboard = () => {
         wsRef.current = ws;
 
         ws.onopen = () => {
-          console.log("✅ WebSocket connected");
           setWsConnected(true);
         };
 
         ws.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
+  try {
+    const message = JSON.parse(event.data);
+    
+    if (message.type === 'strategyUpdate' && message.data) {
+      setTables(prevTables => {
+        const updatedTables = [...prevTables];
+        
+        message.data.forEach(strategyData => {
+          const tableIndex = updatedTables.findIndex(t => t.id === strategyData.tableId);
+          if (tableIndex !== -1) {
+            const data = strategyData.data || [];
+            const table = updatedTables[tableIndex];
+            const isCFF = table.config.strategy === 'C-F/F';
+            const isCustomMode = table.config.selectedFutures !== undefined;
             
-            if (message.type === 'strategyUpdate' && message.data) {
-              setTables(prevTables => {
-                const updatedTables = [...prevTables];
-                
-                message.data.forEach(strategyData => {
-                  const tableIndex = updatedTables.findIndex(t => t.id === strategyData.tableId);
-                  if (tableIndex !== -1) {
-                    updatedTables[tableIndex] = {
-                      ...updatedTables[tableIndex],
-                      data: strategyData.data,
-                      liveData: {
-                        ltp: parseFloat(strategyData.spotPrice),
-                        timestamp: new Date(strategyData.timestamp).toLocaleTimeString()
-                      }
-                    };
-                  }
-                });
-                
-                return updatedTables;
-              });
-            }
-          } catch (err) {
-            console.error("Failed to parse message:", err);
+            // ✅ FIX: Only sort if in "All Expiries" mode, otherwise maintain order
+            const processedData = (isCFF && !isCustomMode) ? sortByExpiry(data) : data;
+            
+            updatedTables[tableIndex] = {
+              ...updatedTables[tableIndex],
+              data: processedData,
+              liveData: {
+                ltp: parseFloat(strategyData.spotPrice),
+                timestamp: new Date(strategyData.timestamp).toLocaleTimeString()
+              }
+            };
           }
-        };
+        });
+        
+        return updatedTables;
+      });
+    }
+  } catch (err) {
+    console.error("Failed to parse message:", err);
+  }
+};
 
         ws.onerror = (err) => {
           console.error("WebSocket error", err);
         };
 
         ws.onclose = () => {
-          console.log("WebSocket disconnected");
           setWsConnected(false);
           reconnectTimer = setTimeout(connect, 2000);
         };
       } catch (err) {
-        console.error("WebSocket setup failed:", err);
         reconnectTimer = setTimeout(connect, 2000);
       }
     };
@@ -311,86 +720,128 @@ const StrategyDashboard = () => {
     };
   }, []);
 
-  const fetchDeribitInstruments = async () => {
-    try {
-      setIsLoadingExpiries(true);
-      const response = await fetch('http://localhost:8080/api/fetch-metadata', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ exchange: 'deribit' })
-      });
+  const fetchBinanceInstruments = async (type = 'option') => {
+  try {
+    setIsLoadingExpiries(true);
+    const response = await fetch('http://localhost:8080/api/fetch-metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exchange: 'binance', instrumentType: type })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success && result.metadata) {
+      setAvailableData(prev => ({
+        ...prev,
+        binance: {
+          ...prev.binance,
+          ...result.metadata
+        }
+      }));
       
-      const result = await response.json();
+      console.log('✅ Binance metadata loaded:', result.metadata);
+      console.log('📊 Future expiries:', result.metadata.futureExpiries);
+      console.log('📊 Option expiries:', result.metadata.optionExpiries);
       
-      if (result.success && result.metadata) {
-        setAvailableData(prev => ({
-          ...prev,
-          deribit: result.metadata
-        }));
-        
-        const expiries = result.metadata.expiries || [];
+      // Set default expiry based on type
+      if (type === 'future' && result.metadata.futureExpiries && result.metadata.futureExpiries.length > 0) {
         setModalForm(prev => ({ 
           ...prev, 
-          optionExpiry: prev.optionExpiry || (expiries[0] || ''),
-          futureExpiry: prev.futureExpiry || (expiries[0] || '')
+          futureExpiry: prev.futureExpiry || result.metadata.futureExpiries[0]
         }));
-      }
-    } catch (error) {
-      console.error('Failed to fetch Deribit instruments:', error);
-    } finally {
-      setIsLoadingExpiries(false);
-    }
-  };
-
-  const fetchBinanceInstruments = async () => {
-    try {
-      setIsLoadingExpiries(true);
-      const response = await fetch('http://localhost:8080/api/fetch-metadata', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ exchange: 'binance' })
-      });
-      
-      const result = await response.json();
-      
-      if (result.success && result.metadata) {
-        setAvailableData(prev => ({
-          ...prev,
-          binance: result.metadata
-        }));
-        
-        const expiries = result.metadata.expiries || [];
+      } else if (type === 'option' && result.metadata.optionExpiries && result.metadata.optionExpiries.length > 0) {
         setModalForm(prev => ({ 
           ...prev, 
-          optionExpiry: prev.optionExpiry || (expiries[0] || ''),
-          futureExpiry: prev.futureExpiry || (expiries[0] || '')
+          optionExpiry: prev.optionExpiry || result.metadata.optionExpiries[0]
         }));
       }
-    } catch (error) {
-      console.error('Failed to fetch Binance instruments:', error);
-    } finally {
-      setIsLoadingExpiries(false);
     }
-  };
+  } catch (error) {
+    console.error('Failed to fetch Binance instruments:', error);
+  } finally {
+    setIsLoadingExpiries(false);
+  }
+};  const fetchDeribitInstruments = async (type = 'option') => {
+  try {
+    setIsLoadingExpiries(true);
+    const response = await fetch('http://localhost:8080/api/fetch-metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exchange: 'deribit', instrumentType: type })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success && result.metadata) {
+      setAvailableData(prev => ({
+        ...prev,
+        deribit: {
+          ...prev.deribit,
+          ...result.metadata
+        }
+      }));
+      
+      console.log('✅ Deribit metadata loaded:', result.metadata);
+      console.log('📊 Future expiries:', result.metadata.futureExpiries);
+      console.log('📊 Option expiries:', result.metadata.optionExpiries);
+      
+      // Set default expiry based on type
+      if (type === 'future' && result.metadata.futureExpiries && result.metadata.futureExpiries.length > 0) {
+        setModalForm(prev => ({ 
+          ...prev, 
+          futureExpiry: prev.futureExpiry || result.metadata.futureExpiries[0]
+        }));
+      } else if (type === 'option' && result.metadata.optionExpiries && result.metadata.optionExpiries.length > 0) {
+        setModalForm(prev => ({ 
+          ...prev, 
+          optionExpiry: prev.optionExpiry || result.metadata.optionExpiries[0]
+        }));
+      }
+    }
+  } catch (error) {
+    console.error('Failed to fetch Deribit instruments:', error);
+  } finally {
+    setIsLoadingExpiries(false);
+  }
+};
 
   useEffect(() => {
-    const ex = modalForm.exchange;
-    if (!ex) return;
+  const ex = modalForm.exchange;
+  const strategy = modalForm.strategy;
+  
+  if (!ex) return;
 
-    const loaded = availableData[ex]?.expiries?.length > 0;
+  const isCFF = strategy === 'C-F/F';
+  const isJelly = strategy === 'Jelly';
+  
+  // ✅ Determine what type of instruments to fetch
+  const instrumentType = isCFF ? 'future' : 'option';
+  
+  const hasData = isCFF 
+    ? (availableData[ex]?.futureExpiries?.length > 0)
+    : (availableData[ex]?.optionExpiries?.length > 0);
 
-    if (!loaded) {
-      if (ex === 'deribit') fetchDeribitInstruments();
-      if (ex === 'binance') fetchBinanceInstruments();
-    } else {
-      const firstExpiry = availableData[ex].expiries[0] || '';
-      setModalForm(prev => ({ 
-        ...prev, 
-        optionExpiry: prev.optionExpiry || firstExpiry, 
-        futureExpiry: prev.futureExpiry || firstExpiry 
-      }));
+  if (!hasData) {
+    if (ex === 'deribit') {
+      fetchDeribitInstruments(instrumentType);
+    } else if (ex === 'binance') {
+      fetchBinanceInstruments(instrumentType);
     }
-  }, [modalForm.exchange, availableData]);
+  } else {
+    // Set default expiries from existing data
+    const expiries = isCFF 
+      ? (availableData[ex]?.futureExpiries || [])
+      : (availableData[ex]?.optionExpiries || availableData[ex]?.expiries || []);
+    
+    const firstExpiry = expiries[0] || '';
+    setModalForm(prev => ({ 
+      ...prev, 
+      optionExpiry: prev.optionExpiry || firstExpiry, 
+      futureExpiry: prev.futureExpiry || firstExpiry 
+    }));
+  }
+}, [modalForm.exchange, modalForm.strategy]);
 
   const addTable = () => {
     const newTable = {
@@ -400,7 +851,8 @@ const StrategyDashboard = () => {
         strategy: '', 
         symbol: 'BTC', 
         optionExpiry: '', 
-        futureExpiry: '', 
+        fut1Expiry: 'all',  
+        fut2Expiry: 'all',  
         strikeInterval: 1000, 
         gap: 1000, 
         noPrtFolio: 10, 
@@ -422,7 +874,8 @@ const StrategyDashboard = () => {
       strategy: '',
       symbol: 'BTC',
       optionExpiry: '',
-      futureExpiry: '',
+      fut1Expiry: 'all',  
+      fut2Expiry: 'all',
       strikeInterval: '1000',
       gap: '1000',
       noPrtFolio: '10',
@@ -445,7 +898,8 @@ const StrategyDashboard = () => {
       strategy: config.strategy || '',
       symbol: config.symbol || 'BTC',
       optionExpiry: config.optionExpiry || '',
-      futureExpiry: config.futureExpiry || '',
+      fut1Expiry: config.fut1Expiry || 'all',  
+      fut2Expiry: config.fut2Expiry || 'all',  
       strikeInterval: String(config.strikeInterval || 1000),
       gap: String(config.gap || 1000),
       noPrtFolio: String(config.noPrtFolio || 10),
@@ -459,66 +913,72 @@ const StrategyDashboard = () => {
     setShowModal(true);
   };
 
-  const applyStrategy = async () => {
-    if (activeTableIndex === null) return;
+ const applyStrategy = async () => {
+  if (activeTableIndex === null) return;
+  if (!modalForm.exchange || !modalForm.strategy) {
+    alert('Please fill in required fields: Exchange and Strategy');
+    return;
+  }
 
-    if (!modalForm.exchange || !modalForm.strategy || !modalForm.optionExpiry) {
-      alert('Please fill in all required fields: Exchange, Strategy, and Option Expiry');
-      return;
-    }
+  if (modalForm.strategy !== 'C-F/F' && !modalForm.optionExpiry) {
+    alert('Please select Option Expiry');
+    return;
+  }
 
-    const config = {
-      exchange: modalForm.exchange,
-      strategy: modalForm.strategy,
-      symbol: modalForm.symbol,
-      optionExpiry: modalForm.optionExpiry,
-      futureExpiry: modalForm.futureExpiry,
-      strikeInterval: parseInt(modalForm.strikeInterval) || 1000,
-      gap: parseInt(modalForm.gap) || 1000,
-      noPrtFolio: parseInt(modalForm.noPrtFolio) || 10,
-      ratio1: parseInt(modalForm.ratio1) || 1,
-      ratio2: parseInt(modalForm.ratio2) || 2,
-      strategyLegType: modalForm.strategyLegType || '1331',
-      strikeMode: modalForm.strikeMode || 'auto',
-      nearestStrike: modalForm.nearestStrike ? parseInt(modalForm.nearestStrike) : ''
-    };
-
-    try {
-      const tableId = tables[activeTableIndex].id;
-      
-      const response = await fetch('http://localhost:8080/api/strategy/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tableId, config })
-      });
-
-      const result = await response.json();
-      
-      if (result.success) {
-        setTables(prevTables => {
-          const newTables = [...prevTables];
-          newTables[activeTableIndex] = { 
-            ...newTables[activeTableIndex], 
-            config, 
-            data: result.data?.data || [],
-            liveData: result.data ? {
-              ltp: parseFloat(result.data.spotPrice),
-              timestamp: new Date().toLocaleTimeString()
-            } : null
-          };
-          return newTables;
-        });
-        
-        setShowModal(false);
-      } else {
-        alert('Failed to apply strategy: ' + (result.error || 'Unknown error'));
-      }
-    } catch (error) {
-      console.error('Apply strategy error:', error);
-      alert('Failed to apply strategy: ' + error.message);
-    }
+  const config = {
+    exchange: modalForm.exchange,
+    strategy: modalForm.strategy,
+    symbol: modalForm.symbol,
+    optionExpiry: modalForm.optionExpiry,
+    fut1Expiry: modalForm.fut1Expiry || 'all',  // ✅ NEW
+    fut2Expiry: modalForm.fut2Expiry || 'all',  // ✅ NEW
+    strikeInterval: parseInt(modalForm.strikeInterval) || 1000,
+    gap: parseInt(modalForm.gap) || 1000,
+    noPrtFolio: parseInt(modalForm.noPrtFolio) || 10,
+    ratio1: parseInt(modalForm.ratio1) || 1,
+    ratio2: parseInt(modalForm.ratio2) || 2,
+    strategyLegType: modalForm.strategyLegType || '1331',
+    strikeMode: modalForm.strikeMode || 'auto',
+    nearestStrike: modalForm.nearestStrike ? parseInt(modalForm.nearestStrike) : ''
   };
 
+  try {
+    const tableId = tables[activeTableIndex].id;
+    
+    const response = await fetch('http://localhost:8080/api/strategy/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tableId, config })
+    });
+
+    const result = await response.json();
+    
+    if (result.success) {
+      setTables(prevTables => {
+        const newTables = [...prevTables];
+        const data = result.data?.data || [];
+        
+        newTables[activeTableIndex] = { 
+          ...newTables[activeTableIndex], 
+          config, 
+          data: data,  // ✅ No sorting needed for C-F/F anymore
+          liveData: result.data ? {
+            ltp: parseFloat(result.data.spotPrice),
+            timestamp: new Date().toLocaleTimeString()
+          } : null
+        };
+        return newTables;
+      });
+      
+      setShowModal(false);
+    } else {
+      alert('Failed to apply strategy: ' + (result.error || 'Unknown error'));
+    }
+  } catch (error) {
+    console.error('Apply strategy error:', error);
+    alert('Failed to apply strategy: ' + error.message);
+  }
+};
   const removeTable = async (id) => {
     try {
       await fetch('http://localhost:8080/api/strategy/remove', {
@@ -531,179 +991,6 @@ const StrategyDashboard = () => {
     } catch (error) {
       console.error('Remove table error:', error);
     }
-  };
-
-  const renderTable = (table) => {
-    const { config, data } = table;
-    if (!data || data.length === 0) {
-      return (
-        <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>
-          Configure strategy to see results
-        </div>
-      );
-    }
-
-    const strategy = config.strategy.toLowerCase();
-
-    if (strategy === 'jelly' || strategy === 'synthetic') {
-      return (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-          <thead>
-            <tr>
-              <th style={{ background: '#f8f9fa', padding: '8px', border: '1px solid #dee2e6' }}>Strike</th>
-              <th style={{ background: '#f8f9fa', padding: '8px', border: '1px solid #dee2e6' }}>Conversion</th>
-              <th style={{ background: '#f8f9fa', padding: '8px', border: '1px solid #dee2e6' }}>Reversal</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((row, idx) => {
-              const convNum = row.conversion != null ? parseFloat(row.conversion) : null;
-              const revNum = row.reversal != null ? parseFloat(row.reversal) : null;
-              return (
-                <tr key={idx} style={{ background: row.strike === row.nearest_strike ? '#ffff99' : 'transparent' }}>
-                  <td style={{ padding: '6px', textAlign: 'center', border: '1px solid #dee2e6', fontWeight: row.strike === row.nearest_strike ? 'bold' : 'normal' }}>
-                    {row.strike}
-                  </td>
-                  <td style={{ 
-                    padding: '6px', 
-                    textAlign: 'center', 
-                    border: '1px solid #dee2e6', 
-                    color: convNum != null ? (convNum >= 0 ? '#27ae60' : '#c0392b') : 'inherit' 
-                  }}>
-                    {row.conversion != null ? row.conversion : '-'}
-                  </td>
-                  <td style={{ 
-                    padding: '6px', 
-                    textAlign: 'center', 
-                    border: '1px solid #dee2e6', 
-                    color: revNum != null ? (revNum >= 0 ? '#27ae60' : '#c0392b') : 'inherit' 
-                  }}>
-                    {row.reversal != null ? row.reversal : '-'}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      );
-    }
-
-    if (strategy === 'butterfly' || strategy === 'pulse_butterfly') {
-      const ceData = data.filter(d => d.type === 'CE');
-      const peData = data.filter(d => d.type === 'PE');
-      
-      return (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-          <thead>
-            <tr>
-              <th colSpan="3" style={{ background: '#ffe8e8', padding: '8px', border: '1px solid #dee2e6' }}>PE Data</th>
-              <th colSpan="3" style={{ background: '#e8f5e8', padding: '8px', border: '1px solid #dee2e6' }}>CE Data</th>
-            </tr>
-            <tr>
-              {['Long', 'Short', 'Strike', 'Strike', 'Long', 'Short'].map((h, i) => (
-                <th key={i} style={{ padding: '8px', border: '1px solid #dee2e6', background: '#f8f9fa' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from({ length: Math.max(ceData.length, peData.length) }).map((_, idx) => {
-              const ce = ceData[idx];
-              const pe = peData[idx];
-              return (
-                <tr key={idx}>
-                  <td style={{ padding: '6px', textAlign: 'center', border: '1px solid #dee2e6' }}>
-                    {pe?.long_value || '-'}
-                  </td>
-                  <td style={{ padding: '6px', textAlign: 'center', border: '1px solid #dee2e6' }}>
-                    {pe?.short_value || '-'}
-                  </td>
-                  <td style={{ 
-                    padding: '6px', 
-                    textAlign: 'center', 
-                    border: '1px solid #dee2e6', 
-                    background: pe?.l2 === pe?.nearest_strike ? '#ffff99' : 'transparent', 
-                    fontWeight: pe?.l2 === pe?.nearest_strike ? 'bold' : 'normal' 
-                  }}>
-                    {pe?.l2 || '-'}
-                  </td>
-                  <td style={{ 
-                    padding: '6px', 
-                    textAlign: 'center', 
-                    border: '1px solid #dee2e6', 
-                    background: ce?.l2 === ce?.nearest_strike ? '#ffff99' : 'transparent', 
-                    fontWeight: ce?.l2 === ce?.nearest_strike ? 'bold' : 'normal' 
-                  }}>
-                    {ce?.l2 || '-'}
-                  </td>
-                  <td style={{ padding: '6px', textAlign: 'center', border: '1px solid #dee2e6' }}>
-                    {ce?.long_value || '-'}
-                  </td>
-                  <td style={{ padding: '6px', textAlign: 'center', border: '1px solid #dee2e6' }}>
-                    {ce?.short_value || '-'}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      );
-    }
-
-    if (strategy === 'ratio') {
-      const ceData = data.filter(d => d.type === 'CE');
-      const peData = data.filter(d => d.type === 'PE');
-      
-      return (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-          <thead>
-            <tr>
-              <th colSpan="2" style={{ background: '#ffe8e8', padding: '8px', border: '1px solid #dee2e6' }}>PE Data</th>
-              <th rowSpan="2" style={{ padding: '8px', border: '1px solid #dee2e6', background: '#f8f9fa' }}>Strike</th>
-              <th colSpan="2" style={{ background: '#e8f5e8', padding: '8px', border: '1px solid #dee2e6' }}>CE Data</th>
-            </tr>
-            <tr>
-              {['Buy', 'Sell', 'Buy', 'Sell'].map((h, i) => (
-                <th key={i} style={{ padding: '8px', border: '1px solid #dee2e6', background: '#f8f9fa' }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from({ length: Math.max(ceData.length, peData.length) }).map((_, idx) => {
-              const ce = ceData[idx];
-              const pe = peData[idx];
-              const strike = ce?.l1 || pe?.l1;
-              return (
-                <tr key={idx}>
-                  <td style={{ padding: '6px', textAlign: 'center', border: '1px solid #dee2e6' }}>
-                    {pe?.buy_value || '-'}
-                  </td>
-                  <td style={{ padding: '6px', textAlign: 'center', border: '1px solid #dee2e6' }}>
-                    {pe?.sell_value || '-'}
-                  </td>
-                  <td style={{ 
-                    padding: '6px', 
-                    textAlign: 'center', 
-                    border: '1px solid #dee2e6', 
-                    background: strike === ce?.nearest_strike ? '#ffff99' : 'transparent', 
-                    fontWeight: strike === ce?.nearest_strike ? 'bold' : 'normal' 
-                  }}>
-                    {strike || '-'}
-                  </td>
-                  <td style={{ padding: '6px', textAlign: 'center', border: '1px solid #dee2e6' }}>
-                    {ce?.buy_value || '-'}
-                  </td>
-                  <td style={{ padding: '6px', textAlign: 'center', border: '1px solid #dee2e6' }}>
-                    {ce?.sell_value || '-'}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      );
-    }
-
-    return null;
   };
 
   return (
@@ -872,6 +1159,7 @@ const StrategyDashboard = () => {
                     <option value="Butterfly">Butterfly</option>
                     <option value="Ratio">Ratio</option>
                     <option value="Pulse_Butterfly">Pulse Butterfly</option>
+                    <option value="C-F/F">C-F/F (Cash-Future/Future)</option>
                   </select>
                 </div>
 
@@ -880,20 +1168,10 @@ const StrategyDashboard = () => {
                   <input type="text" value={modalForm.symbol} onChange={(e) => setModalForm({...modalForm, symbol: e.target.value})} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }} />
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Option Expiry</label>
-                  <select value={modalForm.optionExpiry} onChange={(e) => setModalForm({ ...modalForm, optionExpiry: e.target.value })} disabled={!modalForm.exchange || isLoadingExpiries} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}>
-                    <option value="">{!modalForm.exchange ? 'Select exchange first' : (isLoadingExpiries ? 'Loading...' : '--Select--')}</option>
-                    {(availableData[modalForm.exchange]?.expiries || []).map(exp => (
-                      <option key={exp} value={exp}>{exp}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {modalForm.strategy === 'Jelly' && (
+                {modalForm.strategy !== 'C-F/F' && (
                   <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Future Expiry</label>
-                    <select value={modalForm.futureExpiry} onChange={(e) => setModalForm({ ...modalForm, futureExpiry: e.target.value })} disabled={!modalForm.exchange || isLoadingExpiries} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}>
+                    <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Option Expiry</label>
+                    <select value={modalForm.optionExpiry} onChange={(e) => setModalForm({ ...modalForm, optionExpiry: e.target.value })} disabled={!modalForm.exchange || isLoadingExpiries} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}>
                       <option value="">{!modalForm.exchange ? 'Select exchange first' : (isLoadingExpiries ? 'Loading...' : '--Select--')}</option>
                       {(availableData[modalForm.exchange]?.expiries || []).map(exp => (
                         <option key={exp} value={exp}>{exp}</option>
@@ -901,15 +1179,11 @@ const StrategyDashboard = () => {
                     </select>
                   </div>
                 )}
+  
 
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                   <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>No. Portfolio</label>
                   <input type="number" value={modalForm.noPrtFolio} onChange={(e) => setModalForm({...modalForm, noPrtFolio: e.target.value})} min="1" style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }} />
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Strike Interval</label>
-                  <input type="number" value={modalForm.strikeInterval} onChange={(e) => setModalForm({...modalForm, strikeInterval: e.target.value})} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }} />
                 </div>
 
                 {['Butterfly', 'Ratio', 'Pulse_Butterfly'].includes(modalForm.strategy) && (
@@ -942,24 +1216,44 @@ const StrategyDashboard = () => {
                   </div>
                 )}
 
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Strike Mode</label>
-                  <div style={{ display: 'flex', gap: '15px', alignItems: 'center', marginTop: '8px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 'normal' }}>
-                      <input type="radio" name="strikeMode" value="auto" checked={modalForm.strikeMode === 'auto'} onChange={(e) => setModalForm({...modalForm, strikeMode: e.target.value})} /> Auto
-                    </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 'normal' }}>
-                      <input type="radio" name="strikeMode" value="custom" checked={modalForm.strikeMode === 'custom'} onChange={(e) => setModalForm({...modalForm, strikeMode: e.target.value})} /> Custom
-                    </label>
-                  </div>
-                </div>
+                {modalForm.strategy === 'C-F/F' && (
+  <>
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>
+        Fut1 Expiry
+      </label>
+      <select 
+        value={modalForm.fut1Expiry} 
+        onChange={(e) => setModalForm({ ...modalForm, fut1Expiry: e.target.value })} 
+        disabled={isLoadingExpiries || !modalForm.exchange}
+        style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+      >
+        <option value="all">All Expiries</option>
+        <option value="perpetual">Perpetual</option>
+        {(availableData[modalForm.exchange]?.futureExpiries || []).map(exp => (
+          <option key={exp} value={exp}>{exp}</option>
+        ))}
+      </select>
+    </div>
 
-                {modalForm.strikeMode === 'custom' && (
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Nearest Strike</label>
-                    <input type="number" value={modalForm.nearestStrike} onChange={(e) => setModalForm({...modalForm, nearestStrike: e.target.value})} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }} />
-                  </div>
-                )}
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>
+        Fut2 Expiry
+      </label>
+      <select 
+        value={modalForm.fut2Expiry} 
+        onChange={(e) => setModalForm({ ...modalForm, fut2Expiry: e.target.value })} 
+        disabled={isLoadingExpiries || !modalForm.exchange}
+        style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+      >
+        <option value="all">All Futures</option>
+        {(availableData[modalForm.exchange]?.futureExpiries || []).map(exp => (
+          <option key={exp} value={exp}>{exp}</option>
+        ))}
+      </select>
+    </div>
+  </>
+)}
               </div>
 
               <button onClick={applyStrategy} style={{ width: '100%', padding: '12px', background: '#3498db', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', transition: 'background 0.2s' }}>
@@ -968,6 +1262,98 @@ const StrategyDashboard = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {showCFFDialog && (
+  <div onClick={() => setShowCFFDialog(false)} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1002 }}>
+    <div onClick={e => e.stopPropagation()} style={{ background: 'white', borderRadius: '8px', padding: '30px', width: '90%', maxWidth: '500px', boxShadow: '0 4px 20px rgba(0,0,0,0.3)' }}>
+      <h3 style={{ margin: '0 0 20px 0', fontSize: '16px', fontWeight: '600' }}>
+        Add C-F/F Row
+      </h3>
+      
+      <div style={{ marginBottom: '15px' }}>
+        <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px', display: 'block' }}>Exchange</label>
+        <select 
+          value={cffDialogData.exchange} 
+          onChange={(e) => {
+            const selectedEx = e.target.value;
+            setCffDialogData({...cffDialogData, exchange: selectedEx, fut1Expiry: '', fut2Expiry: ''});
+            
+            if (selectedEx === 'deribit' && (!availableData.deribit.futureExpiries || availableData.deribit.futureExpiries.length === 0)) {
+              fetchDeribitInstruments('future');
+            } else if (selectedEx === 'binance' && (!availableData.binance.futureExpiries || availableData.binance.futureExpiries.length === 0)) {
+              fetchBinanceInstruments('future');
+            }
+          }}
+          style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+        >
+          {(limitExchanges && limitExchanges.length > 0 ? limitExchanges : ['deribit', 'binance']).map(ex => (
+            <option key={ex} value={ex}>{ex.charAt(0).toUpperCase() + ex.slice(1)}</option>
+          ))}
+        </select>
+      </div>
+      
+      <div style={{ marginBottom: '15px' }}>
+        <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px', display: 'block' }}>Fut1 Expiry</label>
+        <select 
+          value={cffDialogData.fut1Expiry} 
+          onChange={(e) => setCffDialogData({...cffDialogData, fut1Expiry: e.target.value})}
+          disabled={!cffDialogData.exchange || isLoadingExpiries}
+          style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+        >
+          <option value="">--Select--</option>
+          <option value="perpetual">Perpetual</option>
+          {(availableData[cffDialogData.exchange]?.futureExpiries || []).map(exp => (
+            <option key={exp} value={exp}>{exp}</option>
+          ))}
+        </select>
+      </div>
+      
+      <div style={{ marginBottom: '20px' }}>
+        <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px', display: 'block' }}>Fut2 Expiry</label>
+        <select 
+          value={cffDialogData.fut2Expiry} 
+          onChange={(e) => setCffDialogData({...cffDialogData, fut2Expiry: e.target.value})}
+          disabled={!cffDialogData.exchange || isLoadingExpiries}
+          style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+        >
+          <option value="">--Select--</option>
+          {(availableData[cffDialogData.exchange]?.futureExpiries || []).map(exp => (
+            <option key={exp} value={exp}>{exp}</option>
+          ))}
+        </select>
+      </div>
+      
+      <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+        <button
+          onClick={() => setShowCFFDialog(false)}
+          style={{ padding: '8px 24px', background: '#e0e0e0', color: '#333', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px' }}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleAddCFFRow}
+          style={{ padding: '8px 24px', background: '#27ae60', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px' }}
+        >
+          Add Row
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+      {showFilterMenu.tableId && showFilterMenu.column && (
+        <>
+          <div 
+            onClick={() => setShowFilterMenu({ tableId: null, column: null, position: null })}
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 }}
+          />
+          <FilterDropdown 
+            tableId={showFilterMenu.tableId}
+            column={showFilterMenu.column}
+            data={tables.find(t => t.id === showFilterMenu.tableId)?.data || []}
+            position={showFilterMenu.position}
+          />
+        </>
       )}
     </div>
   );

@@ -16,53 +16,129 @@ class StrategyCalculator {
     this.activeStrategies.delete(tableId);
   }
 
-  getSpotPrice(exchange) {
-    const ex = exchange.toLowerCase();
-    
-    for (const [key, val] of Object.entries(this.marketData)) {
-      if (!val || val.exchange?.toLowerCase() !== ex) continue;
-      
-      const inst = (val.instrument || '').toUpperCase();
-      
-      if (ex === 'deribit' && inst === 'BTC-PERPETUAL') {
-        const bid = parseFloat(val.best_bid_price);
-        const ask = parseFloat(val.best_ask_price);
-        if (Number.isFinite(bid) && Number.isFinite(ask)) {
-          return (bid + ask) / 2;
-        }
-        return parseFloat(val.last_price) || 0;
-      }
-      
-      if (ex === 'binance' && inst.includes('BTCUSDT')) {
-        const bid = parseFloat(val.best_bid_price);
-        const ask = parseFloat(val.best_ask_price);
-        if (Number.isFinite(bid) && Number.isFinite(ask)) {
-          return (bid + ask) / 2;
-        }
-        return parseFloat(val.last_price) || 0;
-      }
+  // In StrategyCalculator.js - Only the relevant methods
+
+getSpotPrice(exchange) {
+  const ex = exchange.toLowerCase();
+  
+  // ✅ FIX: Use lowercase keys consistently
+  const perpetualKey = ex === 'binance' ? 'binance_btcusdt' : 'deribit_BTC-PERPETUAL';
+  const val = this.marketData[perpetualKey];
+
+  console.log(`🔍 getSpotPrice: Looking for ${perpetualKey}`);
+
+  if (val) {
+    const bid = parseFloat(val.best_bid_price);
+    const ask = parseFloat(val.best_ask_price);
+    if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
+      console.log(`✅ getSpotPrice: Found ${perpetualKey}, bid=${bid}, ask=${ask}`);
+      return (bid + ask) / 2;
     }
-    
-    return 0;
+    const last = parseFloat(val.last_price);
+    if (Number.isFinite(last) && last > 0) {
+      return last;
+    }
   }
   
-  getFuturePrice(exchange, futureExpiry){
-    const ex = exchange.toLowerCase();
-    if (futureExpiry) {
-      const futureSymbol = `BTC-${futureExpiry}`;
-      const key = `${ex}_${futureSymbol}`;
-      if (this.marketData[key]) {
-        const fut = this.marketData[key];
-        const bid = parseFloat(fut.best_bid_price);
-        const ask = parseFloat(fut.best_ask_price);
-        if (Number.isFinite(bid) && Number.isFinite(ask)) {
-          return { bid, ask, mid: (bid + ask) / 2 };
-        }
+  console.log(`❌ getSpotPrice: ${perpetualKey} not found or invalid`);
+  console.log(`📋 Available keys:`, Object.keys(this.marketData).filter(k => k.includes(ex)).slice(0, 5));
+  
+  return 0;
+}
+
+getFuturePrice(exchange, futureExpiry) {
+  const ex = exchange.toLowerCase();
+
+  // If no futureExpiry, return perpetual
+  if (!futureExpiry) {
+    // ✅ FIX: Use lowercase for Binance perpetual
+    const perpetualKey = ex === 'binance' ? 'binance_btcusdt' : 'deribit_BTC-PERPETUAL';
+    const val = this.marketData[perpetualKey];
+
+    console.log(`🔍 getFuturePrice (perpetual): Looking for ${perpetualKey}`);
+
+    if (val) {
+      const bid = parseFloat(val.best_bid_price);
+      const ask = parseFloat(val.best_ask_price);
+
+      if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
+        console.log(`✅ getFuturePrice (perpetual): Found, bid=${bid}, ask=${ask}`);
+        return { bid, ask, mid: (bid + ask) / 2 };
       }
     }
-    const spot = this.getSpotPrice(exchange);
-    return { bid: spot, ask: spot, mid: spot };
+
+    console.log(`❌ getFuturePrice (perpetual): ${perpetualKey} not found`);
+    return { bid: 0, ask: 0, mid: 0 };
   }
+  
+  // ✅ FIX: Build correct lowercase key for futures
+  let key;
+  if (ex === 'binance') {
+    // Binance format: binance_btcusdt_251226 (all lowercase)
+    key = `binance_btcusdt_${futureExpiry}`.toLowerCase();
+  } else {
+    // Deribit format: deribit_BTC-10OCT25
+    key = `deribit_BTC-${futureExpiry}`;
+  }
+  
+  console.log(`🔍 getFuturePrice: Looking for ${key}`);
+  
+  if (this.marketData[key]) {
+    const fut = this.marketData[key];
+    const bid = parseFloat(fut.best_bid_price);
+    const ask = parseFloat(fut.best_ask_price);
+    
+    console.log(`✅ getFuturePrice: Found ${key}, bid=${bid}, ask=${ask}`);
+    
+    if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
+      return { bid, ask, mid: (bid + ask) / 2 };
+    }
+  } else {
+    console.log(`❌ getFuturePrice: ${key} not found`);
+    console.log(`📋 Available Binance future keys:`, 
+      Object.keys(this.marketData)
+        .filter(k => k.startsWith('binance_btcusdt'))
+        .slice(0, 10)
+    );
+  }
+  
+  return { bid: 0, ask: 0, mid: 0 };
+}
+
+getAllFutureExpiries(exchange) {
+  const ex = exchange.toLowerCase();
+  const expiries = new Set();
+  
+  console.log(`🔍 getAllFutureExpiries for ${ex}...`);
+  console.log(`📊 Total marketData keys:`, Object.keys(this.marketData).length);
+  
+  for (const [key, val] of Object.entries(this.marketData)) {
+    if (!val) continue;
+    
+    // ✅ FIX: Check if key starts with exchange name
+    if (!key.startsWith(`${ex}_`)) continue;
+    
+    if (ex === 'deribit') {
+      // Match: deribit_BTC-10OCT25 (not BTC-PERPETUAL)
+      const match = key.match(/^deribit_BTC-(\d{1,2}[A-Z]{3}\d{2})$/i);
+      if (match && !key.includes('PERPETUAL')) {
+        expiries.add(match[1].toUpperCase());
+        console.log(`✅ Found Deribit expiry: ${match[1]}`);
+      }
+    } else if (ex === 'binance') {
+      // ✅ FIX: Match lowercase binance_btcusdt_251226 (not perpetual binance_btcusdt)
+      const match = key.match(/^binance_btcusdt_(\d{6})$/i);
+      if (match) {
+        expiries.add(match[1]);
+        console.log(`✅ Found Binance expiry from key: ${key} -> ${match[1]}`);
+      }
+    }
+  }
+  
+  const result = Array.from(expiries).sort();
+  console.log(`✅ Total expiries found for ${ex}:`, result.length, result);
+  return result;
+}
   
   getOptionQuote(exchange, expiry, strike, type){
     const ex = exchange.toLowerCase();
@@ -172,6 +248,203 @@ class StrategyCalculator {
         });
       });
     });
+    return results;
+  }
+  calculateCashFuture(config) {
+  const { exchange, fut1Expiry, fut2Expiry, noPrtFolio, selectedFutures } = config;
+  const ex = exchange.toLowerCase();
+  
+  const results = [];
+  
+  // Custom mode (manual selection)
+  if (Array.isArray(selectedFutures) && selectedFutures.length > 0) {
+    selectedFutures.forEach(item => {
+      const [itemExchange, fut1, fut2] = item.split('_');
+      
+      const fut1Price = this.getFuturePrice(itemExchange.toLowerCase(), fut1 === 'perpetual' ? null : fut1);
+      const fut2Price = this.getFuturePrice(itemExchange.toLowerCase(), fut2);
+      
+      if (fut1Price.bid && fut1Price.ask && fut2Price.bid && fut2Price.ask) {
+        const fs = fut2Price.bid - fut1Price.ask;
+        const rs = fut1Price.bid - fut2Price.ask;
+        
+        results.push({
+          exchange: itemExchange.toLowerCase(),
+          fut1: fut1,
+          fut2: fut2,
+          fs: fs.toFixed(2),
+          rs: rs.toFixed(2)
+        });
+      }
+    });
+    
+    return results;
+  }
+  
+  // Auto mode
+  const fut1List = [];
+  const fut2List = [];
+  
+  // Get Fut1 list
+  if (fut1Expiry === '' || fut1Expiry === 'all') {
+    // Include perpetual + all futures
+    fut1List.push('perpetual');
+    fut1List.push(...this.getAllFutureExpiries(exchange));
+  } else {
+    fut1List.push(fut1Expiry);
+  }
+  
+  // Get Fut2 list
+  if (fut2Expiry === '' || fut2Expiry === 'all') {
+    fut2List.push(...this.getAllFutureExpiries(exchange));
+  } else {
+    fut2List.push(fut2Expiry);
+  }
+  
+  // Generate matrix
+  fut1List.forEach(f1 => {
+    fut2List.forEach(f2 => {
+      const fut1Price = this.getFuturePrice(ex, f1 === 'perpetual' ? null : f1);
+      const fut2Price = this.getFuturePrice(ex, f2);
+      
+      if (fut1Price.bid && fut1Price.ask && fut2Price.bid && fut2Price.ask) {
+        const fs = fut2Price.bid - fut1Price.ask;
+        const rs = fut1Price.bid - fut2Price.ask;
+        
+        results.push({
+          exchange: ex,
+          fut1: f1,
+          fut2: f2,
+          fs: fs.toFixed(2),
+          rs: rs.toFixed(2)
+        });
+      }
+    });
+  });
+  
+  // Apply portfolio limit
+  const limit = parseInt(noPrtFolio) || 10;
+  return results.slice(0, limit);
+}
+
+  sortExpiriesByDate(expiries, exchange) {
+    const ex = exchange.toLowerCase();
+    
+    return expiries.sort((a, b) => {
+      const dateA = this.parseExpiryDate(a, ex);
+      const dateB = this.parseExpiryDate(b, ex);
+      return dateA - dateB;
+    });
+  }
+
+  parseExpiryDate(expiry, exchange) {
+    const ex = exchange.toLowerCase();
+    
+    if (ex === 'binance') {
+      if (/^\d{6}$/.test(expiry)) {
+        const year = 2000 + parseInt(expiry.substring(0, 2));
+        const month = parseInt(expiry.substring(2, 4)) - 1;
+        const day = parseInt(expiry.substring(4, 6));
+        return new Date(year, month, day);
+      }
+    } else if (ex === 'deribit') {
+      const match = expiry.match(/^(\d{1,2})([A-Z]{3})(\d{2})$/);
+      if (match) {
+        const day = parseInt(match[1]);
+        const monthMap = {
+          JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
+          JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11
+        };
+        const month = monthMap[match[2]];
+        const year = 2000 + parseInt(match[3]);
+        return new Date(year, month, day);
+      }
+    }
+    
+    return new Date(0);
+  }
+  
+  calculateStrategy(tableId) {
+    const config = this.activeStrategies.get(tableId);
+    if (!config) {
+      return null;
+    }
+    
+    const { strategy, strikeInterval, noPrtFolio } = config;
+    const spotPrice = this.getSpotPrice(config.exchange);
+    const nearestStrike = Math.round(spotPrice / (strikeInterval || 1000)) * (strikeInterval || 1000);
+    
+    const strikes = [];
+    const portfolioCount = parseInt(noPrtFolio) || 10;
+    for (let i = -portfolioCount; i <= portfolioCount; i++) {
+      strikes.push(nearestStrike + (i * (strikeInterval || 1000)));
+    }
+    
+    const strategyLower = strategy.toLowerCase();
+
+    if (strategyLower === 'jelly') {
+      return {
+        tableId,
+        strategy: strategy,
+        spotPrice: spotPrice.toFixed(2),
+        data: this.calculateJelly(config, strikes),
+        timestamp: Date.now()
+      };
+    } else if (strategyLower === 'synthetic') {
+      return {
+        tableId,
+        strategy: strategy,
+        spotPrice: spotPrice.toFixed(2),
+        data: this.calculateSynthetic(config, strikes),
+        timestamp: Date.now()
+      };
+    } else if (strategyLower === 'butterfly') {
+      return {
+        tableId,
+        strategy: strategy,
+        spotPrice: spotPrice.toFixed(2),
+        data: this.calculateButterfly(config, strikes),
+        timestamp: Date.now()
+      };
+    } else if (strategyLower === 'ratio') {
+      return {
+        tableId,
+        strategy: strategy,
+        spotPrice: spotPrice.toFixed(2),
+        data: this.calculateRatio(config, strikes),
+        timestamp: Date.now()
+      };
+    } else if (strategyLower === 'pulse_butterfly') {
+      return {
+        tableId,
+        strategy: strategy,
+        spotPrice: spotPrice.toFixed(2),
+        data: this.calculatePulseButterfly(config, strikes),
+        timestamp: Date.now()
+      };
+    } else if (strategyLower === 'c-f/f') {
+      const cashFutureData = this.calculateCashFuture(config);
+      return {
+        tableId,
+        strategy: strategy,
+        spotPrice: spotPrice.toFixed(2),
+        data: cashFutureData,
+        timestamp: Date.now()
+      };
+    }
+
+    return null;
+  }
+
+  calculateAllStrategies() {
+    const results = [];
+    
+    for (const [tableId, config] of this.activeStrategies.entries()) {
+      const result = this.calculateStrategy(tableId);
+      if (result) {
+        results.push(result);
+      }
+    }
     
     return results;
   }
@@ -283,80 +556,6 @@ class StrategyCalculator {
         });
       });
     });
-    
-    return results;
-  }
-
-  calculateStrategy(tableId) {
-    const config = this.activeStrategies.get(tableId);
-    if (!config) return null;
-    
-    const { strategy, strikeInterval, noPrtFolio } = config;
-    const spotPrice = this.getSpotPrice(config.exchange);
-    const nearestStrike = Math.round(spotPrice / (strikeInterval || 1000)) * (strikeInterval || 1000);
-    
-    const strikes = [];
-    const portfolioCount = parseInt(noPrtFolio) || 10;
-    for (let i = -portfolioCount; i <= portfolioCount; i++) {
-      strikes.push(nearestStrike + (i * (strikeInterval || 1000)));
-    }
-    
-    const strategyLower = strategy.toLowerCase();
-    
-    if (strategyLower === 'jelly') {
-      return {
-        tableId,
-        strategy: strategy,
-        spotPrice: spotPrice.toFixed(2),
-        data: this.calculateJelly(config, strikes),
-        timestamp: Date.now()
-      };
-    } else if (strategyLower === 'synthetic') {
-      return {
-        tableId,
-        strategy: strategy,
-        spotPrice: spotPrice.toFixed(2),
-        data: this.calculateSynthetic(config, strikes),
-        timestamp: Date.now()
-      };
-    } else if (strategyLower === 'butterfly') {
-      return {
-        tableId,
-        strategy: strategy,
-        spotPrice: spotPrice.toFixed(2),
-        data: this.calculateButterfly(config, strikes),
-        timestamp: Date.now()
-      };
-    } else if (strategyLower === 'ratio') {
-      return {
-        tableId,
-        strategy: strategy,
-        spotPrice: spotPrice.toFixed(2),
-        data: this.calculateRatio(config, strikes),
-        timestamp: Date.now()
-      };
-    } else if (strategyLower === 'pulse_butterfly') {
-      return {
-        tableId,
-        strategy: strategy,
-        spotPrice: spotPrice.toFixed(2),
-        data: this.calculatePulseButterfly(config, strikes),
-        timestamp: Date.now()
-      };
-    }
-    
-    return null;
-  }
-
-  calculateAllStrategies() {
-    const results = [];
-    
-    for (const [tableId, config] of this.activeStrategies.entries()) {
-      const result = this.calculateStrategy(tableId);
-      if (result) {
-        results.push(result);
-      }
-    }
     
     return results;
   }

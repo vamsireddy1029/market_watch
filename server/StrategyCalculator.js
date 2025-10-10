@@ -21,10 +21,20 @@ class StrategyCalculator {
 getSpotPrice(exchange) {
   const ex = exchange.toLowerCase();
   
-  // ✅ FIX: Use lowercase keys consistently
-  const perpetualKey = ex === 'binance' ? 'binance_btcusdt' : 'deribit_BTC-PERPETUAL';
+  // ✅ Support all three exchanges
+  let perpetualKey;
+  if (ex === 'binance') {
+    perpetualKey = 'binance_btcusdt';
+  } else if (ex === 'deribit') {
+    perpetualKey = 'deribit_BTC-PERPETUAL';
+  } else if (ex === 'bybit') {
+    perpetualKey = 'bybit_btcusdt';  // NEW
+  } else {
+    console.log(`❌ Unknown exchange: ${ex}`);
+    return 0;
+  }
+  
   const val = this.marketData[perpetualKey];
-
   console.log(`🔍 getSpotPrice: Looking for ${perpetualKey}`);
 
   if (val) {
@@ -41,8 +51,6 @@ getSpotPrice(exchange) {
   }
   
   console.log(`❌ getSpotPrice: ${perpetualKey} not found or invalid`);
-  console.log(`📋 Available keys:`, Object.keys(this.marketData).filter(k => k.includes(ex)).slice(0, 5));
-  
   return 0;
 }
 
@@ -51,34 +59,38 @@ getFuturePrice(exchange, futureExpiry) {
 
   // If no futureExpiry, return perpetual
   if (!futureExpiry) {
-    // ✅ FIX: Use lowercase for Binance perpetual
-    const perpetualKey = ex === 'binance' ? 'binance_btcusdt' : 'deribit_BTC-PERPETUAL';
+    let perpetualKey;
+    if (ex === 'binance') {
+      perpetualKey = 'binance_btcusdt';
+    } else if (ex === 'deribit') {
+      perpetualKey = 'deribit_BTC-PERPETUAL';
+    } else if (ex === 'bybit') {
+      perpetualKey = 'bybit_btcusdt';  // NEW
+    } else {
+      return { bid: 0, ask: 0, mid: 0 };
+    }
+    
     const val = this.marketData[perpetualKey];
-
-    console.log(`🔍 getFuturePrice (perpetual): Looking for ${perpetualKey}`);
-
     if (val) {
       const bid = parseFloat(val.best_bid_price);
       const ask = parseFloat(val.best_ask_price);
-
       if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
-        console.log(`✅ getFuturePrice (perpetual): Found, bid=${bid}, ask=${ask}`);
         return { bid, ask, mid: (bid + ask) / 2 };
       }
     }
-
-    console.log(`❌ getFuturePrice (perpetual): ${perpetualKey} not found`);
     return { bid: 0, ask: 0, mid: 0 };
   }
   
-  // ✅ FIX: Build correct lowercase key for futures
+  // ✅ Build correct key for each exchange
   let key;
   if (ex === 'binance') {
-    // Binance format: binance_btcusdt_251226 (all lowercase)
     key = `binance_btcusdt_${futureExpiry}`.toLowerCase();
-  } else {
-    // Deribit format: deribit_BTC-10OCT25
+  } else if (ex === 'deribit') {
     key = `deribit_BTC-${futureExpiry}`;
+  } else if (ex === 'bybit') {
+    key = `bybit_btcusdt-${futureExpiry}`.toLowerCase();  // NEW
+  } else {
+    return { bid: 0, ask: 0, mid: 0 };
   }
   
   console.log(`🔍 getFuturePrice: Looking for ${key}`);
@@ -88,18 +100,9 @@ getFuturePrice(exchange, futureExpiry) {
     const bid = parseFloat(fut.best_bid_price);
     const ask = parseFloat(fut.best_ask_price);
     
-    console.log(`✅ getFuturePrice: Found ${key}, bid=${bid}, ask=${ask}`);
-    
     if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
       return { bid, ask, mid: (bid + ask) / 2 };
     }
-  } else {
-    console.log(`❌ getFuturePrice: ${key} not found`);
-    console.log(`📋 Available Binance future keys:`, 
-      Object.keys(this.marketData)
-        .filter(k => k.startsWith('binance_btcusdt'))
-        .slice(0, 10)
-    );
   }
   
   return { bid: 0, ask: 0, mid: 0 };
@@ -109,35 +112,29 @@ getAllFutureExpiries(exchange) {
   const ex = exchange.toLowerCase();
   const expiries = new Set();
   
-  console.log(`🔍 getAllFutureExpiries for ${ex}...`);
-  console.log(`📊 Total marketData keys:`, Object.keys(this.marketData).length);
-  
   for (const [key, val] of Object.entries(this.marketData)) {
-    if (!val) continue;
-    
-    // ✅ FIX: Check if key starts with exchange name
-    if (!key.startsWith(`${ex}_`)) continue;
+    if (!val || !key.startsWith(`${ex}_`)) continue;
     
     if (ex === 'deribit') {
-      // Match: deribit_BTC-10OCT25 (not BTC-PERPETUAL)
       const match = key.match(/^deribit_BTC-(\d{1,2}[A-Z]{3}\d{2})$/i);
       if (match && !key.includes('PERPETUAL')) {
         expiries.add(match[1].toUpperCase());
-        console.log(`✅ Found Deribit expiry: ${match[1]}`);
       }
     } else if (ex === 'binance') {
-      // ✅ FIX: Match lowercase binance_btcusdt_251226 (not perpetual binance_btcusdt)
       const match = key.match(/^binance_btcusdt_(\d{6})$/i);
       if (match) {
         expiries.add(match[1]);
-        console.log(`✅ Found Binance expiry from key: ${key} -> ${match[1]}`);
+      }
+    } else if (ex === 'bybit') {  // NEW
+      // Bybit format: bybit_btcusdt-27dec24
+      const match = key.match(/^bybit_btcusdt-(\d{2}[a-z]{3}\d{2})$/i);
+      if (match) {
+        expiries.add(match[1].toUpperCase());
       }
     }
   }
   
-  const result = Array.from(expiries).sort();
-  console.log(`✅ Total expiries found for ${ex}:`, result.length, result);
-  return result;
+  return Array.from(expiries).sort();
 }
   
   getOptionQuote(exchange, expiry, strike, type){

@@ -336,21 +336,307 @@ const handleAddCFFRow = async () => {
   }
 };
   const renderTable = (table) => {
-    if (table.isLoading) {
-      return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>Loading strategy data...</div>;
-    }
+  if (table.isLoading) {
+    return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>Loading strategy data...</div>;
+  }
 
-    if (!table.data || table.data.length === 0) {
-      return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>No data available. Configure strategy settings.</div>;
-    }
+  if (!table.data || table.data.length === 0) {
+    return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>No data available. Configure strategy settings.</div>;
+  }
 
-    const isCFF = table.config.strategy === 'C-F/F';
+  const { config, data } = table;
+  const strategy = config.strategy?.toLowerCase() || '';
+  const isCFF = strategy === 'c-f/f';
   
-  let displayData = table.data;
+  // Apply filters
+  let displayData = data;
   const filteredData = applyFilters(displayData, table.id);
-  
-    // For C-F/F, add exchange column
-    const headers = isCFF && filteredData.length > 0 && !Object.keys(filteredData[0]).includes('exchange')
+
+  // ================================
+  // JELLY / SYNTHETIC STRATEGY
+  // ================================
+  if (strategy === 'jelly' || strategy === 'synthetic') {
+    return (
+      <div style={{ position: 'relative' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+          <thead>
+            <tr style={{ background: '#f8f9fa' }}>
+              <th style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#f8f9fa', zIndex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                  <span>Strike</span>
+                  <button
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setShowFilterMenu({ 
+                        tableId: table.id, 
+                        column: 'strike',
+                        position: { top: rect.bottom + 5, left: rect.left }
+                      });
+                    }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px', color: '#666' }}
+                  >
+                    ▼
+                  </button>
+                </div>
+              </th>
+              <th style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#f8f9fa', zIndex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                  <span>Conversion</span>
+                  <button
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setShowFilterMenu({ 
+                        tableId: table.id, 
+                        column: 'conversion',
+                        position: { top: rect.bottom + 5, left: rect.left }
+                      });
+                    }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px', color: '#666' }}
+                  >
+                    ▼
+                  </button>
+                </div>
+              </th>
+              <th style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#f8f9fa', zIndex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                  <span>Reversal</span>
+                  <button
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setShowFilterMenu({ 
+                        tableId: table.id, 
+                        column: 'reversal',
+                        position: { top: rect.bottom + 5, left: rect.left }
+                      });
+                    }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px', color: '#666' }}
+                  >
+                    ▼
+                  </button>
+                </div>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredData.map((row, idx) => {
+              const convNum = row.conversion != null ? parseFloat(row.conversion) : null;
+              const revNum = row.reversal != null ? parseFloat(row.reversal) : null;
+              const isNearestStrike = row.strike === row.nearest_strike;
+              
+              return (
+                <tr key={idx} style={{ background: isNearestStrike ? '#ffff99' : (idx % 2 === 0 ? 'white' : '#f9f9f9') }}>
+                  <td style={{ 
+                    padding: '6px 4px', 
+                    textAlign: 'center', 
+                    border: '1px solid #dee2e6',
+                    fontWeight: isNearestStrike ? 'bold' : 'normal'
+                  }}>
+                    {row.strike}
+                  </td>
+                  <td style={{ 
+                    padding: '6px 4px', 
+                    textAlign: 'center', 
+                    border: '1px solid #dee2e6',
+                    color: convNum != null ? (convNum >= 0 ? '#27ae60' : '#e74c3c') : 'inherit'
+                  }}>
+                    {row.conversion != null ? row.conversion : '-'}
+                  </td>
+                  <td style={{ 
+                    padding: '6px 4px', 
+                    textAlign: 'center', 
+                    border: '1px solid #dee2e6',
+                    color: revNum != null ? (revNum >= 0 ? '#27ae60' : '#e74c3c') : 'inherit'
+                  }}>
+                    {row.reversal != null ? row.reversal : '-'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  // ================================
+  // BUTTERFLY / PULSE BUTTERFLY
+  // ================================
+  if (strategy === 'butterfly' || strategy === 'pulse_butterfly') {
+    const ceData = filteredData.filter(d => d.type === 'CE');
+    const peData = filteredData.filter(d => d.type === 'PE');
+    
+    return (
+      <div style={{ position: 'relative' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+          <thead>
+            <tr style={{ background: '#f8f9fa' }}>
+              <th colSpan="3" style={{ background: '#ffe8e8', padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px' }}>
+                PE Data
+              </th>
+              <th colSpan="3" style={{ background: '#e8f5e8', padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px' }}>
+                CE Data
+              </th>
+            </tr>
+            <tr style={{ background: '#f8f9fa' }}>
+              {['Long', 'Short', 'Strike', 'Strike', 'Long', 'Short'].map((h, i) => (
+                <th key={i} style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', position: 'sticky', top: 0, background: '#f8f9fa', zIndex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                    <span>{h}</span>
+                    <button
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const colMap = { 'Long': 'long_value', 'Short': 'short_value', 'Strike': 'l2' };
+                        setShowFilterMenu({ 
+                          tableId: table.id, 
+                          column: colMap[h] || h.toLowerCase(),
+                          position: { top: rect.bottom + 5, left: rect.left }
+                        });
+                      }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px', color: '#666' }}
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: Math.max(ceData.length, peData.length) }).map((_, idx) => {
+              const ce = ceData[idx];
+              const pe = peData[idx];
+              
+              return (
+                <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f9f9f9' }}>
+                  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+                    {pe?.long_value || '-'}
+                  </td>
+                  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+                    {pe?.short_value || '-'}
+                  </td>
+                  <td style={{ 
+                    padding: '6px 4px', 
+                    textAlign: 'center', 
+                    border: '1px solid #dee2e6',
+                    background: pe?.l2 === pe?.nearest_strike ? '#ffff99' : 'transparent',
+                    fontWeight: pe?.l2 === pe?.nearest_strike ? 'bold' : 'normal'
+                  }}>
+                    {pe?.l2 || '-'}
+                  </td>
+                  <td style={{ 
+                    padding: '6px 4px', 
+                    textAlign: 'center', 
+                    border: '1px solid #dee2e6',
+                    background: ce?.l2 === ce?.nearest_strike ? '#ffff99' : 'transparent',
+                    fontWeight: ce?.l2 === ce?.nearest_strike ? 'bold' : 'normal'
+                  }}>
+                    {ce?.l2 || '-'}
+                  </td>
+                  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+                    {ce?.long_value || '-'}
+                  </td>
+                  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+                    {ce?.short_value || '-'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  // ================================
+  // RATIO STRATEGY
+  // ================================
+  if (strategy === 'ratio') {
+    const ceData = filteredData.filter(d => d.type === 'CE');
+    const peData = filteredData.filter(d => d.type === 'PE');
+    
+    return (
+      <div style={{ position: 'relative' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+          <thead>
+            <tr style={{ background: '#f8f9fa' }}>
+              <th colSpan="2" style={{ background: '#ffe8e8', padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px' }}>
+                PE Data
+              </th>
+              <th rowSpan="2" style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', verticalAlign: 'middle' }}>
+                Strike
+              </th>
+              <th colSpan="2" style={{ background: '#e8f5e8', padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px' }}>
+                CE Data
+              </th>
+            </tr>
+            <tr style={{ background: '#f8f9fa' }}>
+              {['Buy', 'Sell', 'Buy', 'Sell'].map((h, i) => (
+                <th key={i} style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', position: 'sticky', top: 0, background: '#f8f9fa', zIndex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                    <span>{h}</span>
+                    <button
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const colMap = { 'Buy': 'buy_value', 'Sell': 'sell_value' };
+                        setShowFilterMenu({ 
+                          tableId: table.id, 
+                          column: colMap[h] || h.toLowerCase(),
+                          position: { top: rect.bottom + 5, left: rect.left }
+                        });
+                      }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px', color: '#666' }}
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: Math.max(ceData.length, peData.length) }).map((_, idx) => {
+              const ce = ceData[idx];
+              const pe = peData[idx];
+              const strike = ce?.l1 || pe?.l1;
+              const isNearestStrike = strike === ce?.nearest_strike || strike === pe?.nearest_strike;
+              
+              return (
+                <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f9f9f9' }}>
+                  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+                    {pe?.buy_value || '-'}
+                  </td>
+                  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+                    {pe?.sell_value || '-'}
+                  </td>
+                  <td style={{ 
+                    padding: '6px 4px', 
+                    textAlign: 'center', 
+                    border: '1px solid #dee2e6',
+                    background: isNearestStrike ? '#ffff99' : 'transparent',
+                    fontWeight: isNearestStrike ? 'bold' : 'normal'
+                  }}>
+                    {strike || '-'}
+                  </td>
+                  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+                    {ce?.buy_value || '-'}
+                  </td>
+                  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+                    {ce?.sell_value || '-'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  // ================================
+  // C-F/F STRATEGY (GENERIC TABLE)
+  // ================================
+  if (isCFF) {
+    const headers = filteredData.length > 0 && !Object.keys(filteredData[0]).includes('exchange')
       ? ['exchange', ...Object.keys(filteredData[0])]
       : Object.keys(filteredData[0] || {});
 
@@ -358,44 +644,32 @@ const handleAddCFFRow = async () => {
       <div style={{ position: 'relative' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
           <thead>
-  <tr style={{ background: '#f8f9fa' }}>
-    {headers.map(header => (
-      <th key={header} style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#f8f9fa', zIndex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
-          <span>{header}</span>
-          <button
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              setShowFilterMenu({ 
-                tableId: table.id, 
-                column: header,
-                position: { top: rect.bottom + 5, left: rect.left }
-              });
-            }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px', color: '#666' }}
-          >
-            ▼
-          </button>
-        </div>
-      </th>
-    ))}
-    {isCFF && (
-      <th style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', width: '100px' }}>
-        <button
-         
-          style={{
-            padding: '4px 8px',
-            background: '#27ae60',
-            color: 'white',
-            border: 'none'
-          }}
-        >
-          Actions
-        </button>
-      </th>
-    )}
-  </tr>
-</thead>
+            <tr style={{ background: '#f8f9fa' }}>
+              {headers.map(header => (
+                <th key={header} style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#f8f9fa', zIndex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                    <span>{header}</span>
+                    <button
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setShowFilterMenu({ 
+                          tableId: table.id, 
+                          column: header,
+                          position: { top: rect.bottom + 5, left: rect.left }
+                        });
+                      }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px', color: '#666' }}
+                    >
+                      ▼
+                    </button>
+                  </div>
+                </th>
+              ))}
+              <th style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', width: '100px' }}>
+                Actions
+              </th>
+            </tr>
+          </thead>
           <tbody>
             {filteredData.map((row, idx) => (
               <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f9f9f9' }}>
@@ -411,62 +685,115 @@ const handleAddCFFRow = async () => {
                   
                   return <td key={header} style={style}>{val || '-'}</td>;
                 })}
-                {isCFF && (
-  <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
-    <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
-      <button 
-        onClick={(e) => {
-          e.stopPropagation();
-          if (window.confirm(`Remove row for ${row.expiry}?`)) {
-            removeRow(table.id, row);
-          }
-        }}
-        style={{
-          padding: '3px 6px',
-          background: '#e74c3c',
-          color: 'white',
-          border: 'none',
-          borderRadius: '3px',
-          cursor: 'pointer',
-          fontSize: '10px'
-        }}
-        title="Remove this row"
-      >
-        ❌
-      </button>
-      <button 
-        onClick={() => {
-            setActiveTableIndex(tables.findIndex(t => t.id === table.id));
-            setCffDialogData({
-              tableId: table.id,
-              exchange: table.config.exchange || initialExchange,
-              futureExpiry: ''
-            });
-            setShowCFFDialog(true);
-          }}
-        style={{
-          padding: '3px 6px',
-          background: '#27ae60',
-          color: 'white',
-          border: 'none',
-          borderRadius: '3px',
-          cursor: 'pointer',
-          fontSize: '10px'
-        }}
-        title="Add row after this"
-      >
-        ➕
-      </button>
-    </div>
-  </td>
-)}
+                <td style={{ padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' }}>
+                  <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm(`Remove row for ${row.expiry}?`)) {
+                          removeRow(table.id, row);
+                        }
+                      }}
+                      style={{
+                        padding: '3px 6px',
+                        background: '#e74c3c',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        fontSize: '10px'
+                      }}
+                      title="Remove this row"
+                    >
+                      ❌
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setActiveTableIndex(tables.findIndex(t => t.id === table.id));
+                        setCffDialogData({
+                          tableId: table.id,
+                          exchange: table.config.exchange || initialExchange,
+                          futureExpiry: ''
+                        });
+                        setShowCFFDialog(true);
+                      }}
+                      style={{
+                        padding: '3px 6px',
+                        background: '#27ae60',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        fontSize: '10px'
+                      }}
+                      title="Add row after this"
+                    >
+                      ➕
+                    </button>
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
     );
-  };
+  }
+
+  // ================================
+  // FALLBACK: GENERIC TABLE
+  // ================================
+  const headers = Object.keys(filteredData[0] || {});
+  
+  return (
+    <div style={{ position: 'relative' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+        <thead>
+          <tr style={{ background: '#f8f9fa' }}>
+            {headers.map(header => (
+              <th key={header} style={{ padding: '8px 4px', border: '1px solid #dee2e6', fontWeight: '600', fontSize: '10px', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#f8f9fa', zIndex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                  <span>{header}</span>
+                  <button
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setShowFilterMenu({ 
+                        tableId: table.id, 
+                        column: header,
+                        position: { top: rect.bottom + 5, left: rect.left }
+                      });
+                    }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '10px', padding: '2px', color: '#666' }}
+                  >
+                    ▼
+                  </button>
+                </div>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {filteredData.map((row, idx) => (
+            <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f9f9f9' }}>
+              {headers.map(header => {
+                let val = row[header];
+                let style = { padding: '6px 4px', textAlign: 'center', border: '1px solid #dee2e6' };
+                
+                if (typeof val === 'number') {
+                  val = val.toFixed(2);
+                  if (parseFloat(val) > 0) style.color = '#27ae60';
+                  else if (parseFloat(val) < 0) style.color = '#e74c3c';
+                }
+                
+                return <td key={header} style={style}>{val || '-'}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
 
   const loadSavedConfigs = async () => {
     try {
@@ -762,7 +1089,49 @@ const handleAddCFFRow = async () => {
   } finally {
     setIsLoadingExpiries(false);
   }
-};  const fetchDeribitInstruments = async (type = 'option') => {
+};  
+const fetchBybitInstruments = async (type = 'option') => {
+  try {
+    setIsLoadingExpiries(true);
+    const response = await fetch('http://localhost:8080/api/fetch-metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ exchange: 'bybit', instrumentType: type })
+    });
+    
+    const result = await response.json();
+    
+    if (result.success && result.metadata) {
+      setAvailableData(prev => ({
+        ...prev,
+        bybit: {
+          ...prev.bybit,
+          ...result.metadata
+        }
+      }));
+      
+      console.log('✅ Bybit metadata loaded:', result.metadata);
+      
+      if (type === 'future' && result.metadata.futureExpiries && result.metadata.futureExpiries.length > 0) {
+        setModalForm(prev => ({ 
+          ...prev, 
+          futureExpiry: prev.futureExpiry || result.metadata.futureExpiries[0]
+        }));
+      } else if (type === 'option' && result.metadata.optionExpiries && result.metadata.optionExpiries.length > 0) {
+        setModalForm(prev => ({ 
+          ...prev, 
+          optionExpiry: prev.optionExpiry || result.metadata.optionExpiries[0]
+        }));
+      }
+    }
+  } catch (error) {
+    console.error('Failed to fetch Bybit instruments:', error);
+  } finally {
+    setIsLoadingExpiries(false);
+  }
+};
+
+const fetchDeribitInstruments = async (type = 'option') => {
   try {
     setIsLoadingExpiries(true);
     const response = await fetch('http://localhost:8080/api/fetch-metadata', {
@@ -813,9 +1182,6 @@ const handleAddCFFRow = async () => {
   if (!ex) return;
 
   const isCFF = strategy === 'C-F/F';
-  const isJelly = strategy === 'Jelly';
-  
-  // ✅ Determine what type of instruments to fetch
   const instrumentType = isCFF ? 'future' : 'option';
   
   const hasData = isCFF 
@@ -827,9 +1193,10 @@ const handleAddCFFRow = async () => {
       fetchDeribitInstruments(instrumentType);
     } else if (ex === 'binance') {
       fetchBinanceInstruments(instrumentType);
+    } else if (ex === 'bybit') {  // ADD THIS
+      fetchBybitInstruments(instrumentType);
     }
   } else {
-    // Set default expiries from existing data
     const expiries = isCFF 
       ? (availableData[ex]?.futureExpiries || [])
       : (availableData[ex]?.optionExpiries || availableData[ex]?.expiries || []);
@@ -1144,7 +1511,7 @@ const handleAddCFFRow = async () => {
                   <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Exchange</label>
                   <select value={modalForm.exchange} onChange={(e) => setModalForm({...modalForm, exchange: e.target.value})} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}>
                     <option value="">--Select--</option>
-                    {(limitExchanges && limitExchanges.length > 0 ? limitExchanges : ['binance','deribit']).map(ex => (
+                    {(limitExchanges && limitExchanges.length > 0 ? limitExchanges : ['binance','deribit','bybit']).map(ex => (
                       <option key={ex} value={ex}>{ex.charAt(0).toUpperCase() + ex.slice(1)}</option>
                     ))}
                   </select>
@@ -1287,9 +1654,9 @@ const handleAddCFFRow = async () => {
           }}
           style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
         >
-          {(limitExchanges && limitExchanges.length > 0 ? limitExchanges : ['deribit', 'binance']).map(ex => (
-            <option key={ex} value={ex}>{ex.charAt(0).toUpperCase() + ex.slice(1)}</option>
-          ))}
+          {(limitExchanges && limitExchanges.length > 0 ? limitExchanges : ['deribit', 'binance', 'bybit']).map(ex => (
+  <option key={ex} value={ex}>{ex.charAt(0).toUpperCase() + ex.slice(1)}</option>
+))}
         </select>
       </div>
       

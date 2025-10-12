@@ -139,10 +139,37 @@ getAllFutureExpiries(exchange) {
   
   getOptionQuote(exchange, expiry, strike, type){
     const ex = exchange.toLowerCase();
-    const symbol = `BTC-${expiry}-${strike}-${type}`;
-    const key = `${ex}_${symbol}`;
+    
+    // ✅ Build correct key for each exchange
+    let symbol, key;
+    
+    if (ex === 'bybit') {
+      // ✅ FIX: Bybit keys are stored in lowercase after normalization
+      symbol = `BTC-${expiry.toUpperCase()}-${strike}-${type.toUpperCase()}-USDT`;
+      key = `bybit_${symbol.toLowerCase()}`;
+    } else if (ex === 'binance') {
+      symbol = `BTC-${expiry}-${strike}-${type}`;
+      key = `binance_${symbol}`;
+    } else {
+      // Deribit format
+      symbol = `BTC-${expiry}-${strike}-${type}`;
+      key = `deribit_${symbol}`;
+    }
+    
     const q = this.marketData[key];
-    if (!q) return null;
+    if (!q) {
+      console.log(`❌ Option quote not found: ${key}`);
+      
+      // ✅ Debug: Show available keys for this exchange
+      const availableKeys = Object.keys(this.marketData)
+        .filter(k => k.startsWith(`${ex}_BTC-${expiry}`))
+        .slice(0, 5);
+      if (availableKeys.length > 0) {
+        console.log(`📊 Available keys for ${ex}_BTC-${expiry}:`,  availableKeys.slice(0, 10));
+      }
+      return null;
+    }
+    
     const bid = parseFloat(q.best_bid_price);
     const ask = parseFloat(q.best_ask_price);
     const mark = parseFloat(q.mark_price);
@@ -160,7 +187,6 @@ getAllFutureExpiries(exchange) {
       last: Number.isFinite(last) ? last : null
     };
   }
-  
   calculateJelly(config, strikes) {
     const { exchange, optionExpiry, futureExpiry } = config;
     const ex = exchange.toLowerCase();
@@ -197,12 +223,64 @@ getAllFutureExpiries(exchange) {
   }
 
   calculateSynthetic(config, strikes) {
-      const updatedConfig = {
-      ...config,
-      futureExpiry: config.optionExpiry
-    };
-    return this.calculateJelly(updatedConfig, strikes);
+  const { exchange, optionExpiry } = config;
+  const ex = exchange.toLowerCase();
+  
+  // ✅ Try to get future with same expiry
+  let fut = this.getFuturePrice(ex, optionExpiry);
+  
+  const spotPrice = this.getSpotPrice(ex);
+  const nearestStrike = Math.round(spotPrice / 1000) * 1000;
+  
+  // ✅ Check if future exists for this expiry
+  const hasFuture = fut.bid && fut.ask && fut.bid > 0 && fut.ask > 0;
+  
+  if (hasFuture) {
+    console.log(`✅ Synthetic: Using future for expiry ${optionExpiry}`);
+    console.log(`📊 Future price: bid=${fut.bid}, ask=${fut.ask}`);
+  } else {
+    console.log(`⚠️ Synthetic: No future for ${optionExpiry}, using CE/PE only`);
   }
+  
+  return strikes.map(strike => {
+    const ce = this.getOptionQuote(ex, optionExpiry, strike, 'C');
+    const pe = this.getOptionQuote(ex, optionExpiry, strike, 'P');
+    if (!ce || !pe) return null;
+    
+    const ce_bid = ce.bid;
+    const ce_ask = ce.ask;
+    const pe_bid = pe.bid;
+    const pe_ask = pe.ask;
+    
+    let conversion = null;
+    let reversal = null;
+    
+    if (hasFuture) {
+      // ✅ Original formula with future
+      if ([ce_bid, pe_ask, fut.ask, ce_ask, pe_bid, fut.bid].every(v => v !== null && v > 0)) {
+        conversion = (ce_bid + strike) - (pe_ask + fut.ask);
+        reversal = (pe_bid + fut.bid) - (ce_ask + strike);
+      }
+    } else {
+      // ✅ NEW: Synthetic without future - use CE/PE prices only
+      // Formula: Synthetic Long = CE_bid - PE_ask
+      //          Synthetic Short = PE_bid - CE_ask
+      if ([ce_bid, pe_ask, ce_ask, pe_bid].every(v => v !== null && v > 0)) {
+        conversion = ce_bid - pe_ask;
+        reversal = pe_bid - ce_ask;
+      }
+    }
+    
+    return {
+      strike,
+      conversion: conversion !== null ? conversion.toFixed(2) : null,
+      reversal: reversal !== null ? reversal.toFixed(2) : null,
+      nearest_strike: nearestStrike,
+      ce_ltp: ce.last?.toFixed(2),
+      pe_ltp: pe.last?.toFixed(2)
+    };
+  }).filter(Boolean);
+}
   calculateButterfly(config, strikes) {
     const { exchange, optionExpiry, gap } = config;
     const ex = exchange.toLowerCase();

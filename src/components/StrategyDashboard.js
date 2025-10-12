@@ -29,6 +29,7 @@ const StrategyDashboard = () => {
     strategy: '',
     symbol: 'BTC',
     optionExpiry: '',
+    futureExpiry: '',
     fut1Expiry: 'all',  
     fut2Expiry: 'all',  
     strikeInterval: '1000',
@@ -739,12 +740,7 @@ const handleAddCFFRow = async () => {
       </div>
     );
   }
-
-  // ================================
-  // FALLBACK: GENERIC TABLE
-  // ================================
   const headers = Object.keys(filteredData[0] || {});
-  
   return (
     <div style={{ position: 'relative' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
@@ -1085,11 +1081,11 @@ const handleAddCFFRow = async () => {
       }
     }
   } catch (error) {
-    console.error('Failed to fetch Binance instruments:', error);
+    console.error('Failed to fetch Deribit instruments:', error);
   } finally {
     setIsLoadingExpiries(false);
   }
-};  
+};
 const fetchBybitInstruments = async (type = 'option') => {
   try {
     setIsLoadingExpiries(true);
@@ -1125,12 +1121,11 @@ const fetchBybitInstruments = async (type = 'option') => {
       }
     }
   } catch (error) {
-    console.error('Failed to fetch Bybit instruments:', error);
+    console.error('Failed to fetch Deribit instruments:', error);
   } finally {
     setIsLoadingExpiries(false);
   }
 };
-
 const fetchDeribitInstruments = async (type = 'option') => {
   try {
     setIsLoadingExpiries(true);
@@ -1182,31 +1177,43 @@ const fetchDeribitInstruments = async (type = 'option') => {
   if (!ex) return;
 
   const isCFF = strategy === 'C-F/F';
-  const instrumentType = isCFF ? 'future' : 'option';
+  const isJelly = strategy === 'Jelly';
   
-  const hasData = isCFF 
-    ? (availableData[ex]?.futureExpiries?.length > 0)
-    : (availableData[ex]?.optionExpiries?.length > 0);
-
-  if (!hasData) {
-    if (ex === 'deribit') {
-      fetchDeribitInstruments(instrumentType);
-    } else if (ex === 'binance') {
-      fetchBinanceInstruments(instrumentType);
-    } else if (ex === 'bybit') {  // ADD THIS
-      fetchBybitInstruments(instrumentType);
+  // ✅ NEW: Jelly needs BOTH option and future metadata
+  if (isJelly) {
+    const hasOptionData = availableData[ex]?.optionExpiries?.length > 0;
+    const hasFutureData = availableData[ex]?.futureExpiries?.length > 0;
+    
+    if (!hasOptionData) {
+      if (ex === 'deribit') fetchDeribitInstruments('option');
+      else if (ex === 'binance') fetchBinanceInstruments('option');
+      else if (ex === 'bybit') fetchBybitInstruments('option');
+    }
+    
+    if (!hasFutureData) {
+      setTimeout(() => {
+        if (ex === 'deribit') fetchDeribitInstruments('future');
+        else if (ex === 'binance') fetchBinanceInstruments('future');
+        else if (ex === 'bybit') fetchBybitInstruments('future');
+      }, 500);
     }
   } else {
-    const expiries = isCFF 
-      ? (availableData[ex]?.futureExpiries || [])
-      : (availableData[ex]?.optionExpiries || availableData[ex]?.expiries || []);
+    // Original logic for other strategies
+    const instrumentType = isCFF ? 'future' : 'option';
     
-    const firstExpiry = expiries[0] || '';
-    setModalForm(prev => ({ 
-      ...prev, 
-      optionExpiry: prev.optionExpiry || firstExpiry, 
-      futureExpiry: prev.futureExpiry || firstExpiry 
-    }));
+    const hasData = isCFF 
+      ? (availableData[ex]?.futureExpiries?.length > 0)
+      : (availableData[ex]?.optionExpiries?.length > 0);
+
+    if (!hasData) {
+      if (ex === 'deribit') {
+        fetchDeribitInstruments(instrumentType);
+      } else if (ex === 'binance') {
+        fetchBinanceInstruments(instrumentType);
+      } else if (ex === 'bybit') {
+        fetchBybitInstruments(instrumentType);
+      }
+    }
   }
 }, [modalForm.exchange, modalForm.strategy]);
 
@@ -1265,6 +1272,7 @@ const fetchDeribitInstruments = async (type = 'option') => {
       strategy: config.strategy || '',
       symbol: config.symbol || 'BTC',
       optionExpiry: config.optionExpiry || '',
+      futureExpiry: config.futureExpiry || '', // ✅ ADD THIS
       fut1Expiry: config.fut1Expiry || 'all',  
       fut2Expiry: config.fut2Expiry || 'all',  
       strikeInterval: String(config.strikeInterval || 1000),
@@ -1280,16 +1288,33 @@ const fetchDeribitInstruments = async (type = 'option') => {
     setShowModal(true);
   };
 
- const applyStrategy = async () => {
+const applyStrategy = async () => {
   if (activeTableIndex === null) return;
   if (!modalForm.exchange || !modalForm.strategy) {
     alert('Please fill in required fields: Exchange and Strategy');
     return;
   }
 
-  if (modalForm.strategy !== 'C-F/F' && !modalForm.optionExpiry) {
+  // ✅ NEW: Validation for different strategies
+  if (modalForm.strategy === 'Jelly') {
+    if (!modalForm.optionExpiry || !modalForm.futureExpiry) {
+      alert('Please select both Option Expiry and Future Expiry for Jelly strategy');
+      return;
+    }
+  } else if (modalForm.strategy === 'Synthetic') {
+    if (!modalForm.optionExpiry) {
+      alert('Please select Expiry for Synthetic strategy');
+      return;
+    }
+  } else if (modalForm.strategy !== 'C-F/F' && !modalForm.optionExpiry) {
     alert('Please select Option Expiry');
     return;
+  }
+
+  // ✅ NEW: Set futureExpiry based on strategy
+  let futureExpiry = modalForm.futureExpiry;
+  if (modalForm.strategy === 'Synthetic') {
+    futureExpiry = modalForm.optionExpiry; // Use same expiry for Synthetic
   }
 
   const config = {
@@ -1297,8 +1322,9 @@ const fetchDeribitInstruments = async (type = 'option') => {
     strategy: modalForm.strategy,
     symbol: modalForm.symbol,
     optionExpiry: modalForm.optionExpiry,
-    fut1Expiry: modalForm.fut1Expiry || 'all',  // ✅ NEW
-    fut2Expiry: modalForm.fut2Expiry || 'all',  // ✅ NEW
+    futureExpiry: futureExpiry, // ✅ ADD THIS
+    fut1Expiry: modalForm.fut1Expiry || 'all',
+    fut2Expiry: modalForm.fut2Expiry || 'all',
     strikeInterval: parseInt(modalForm.strikeInterval) || 1000,
     gap: parseInt(modalForm.gap) || 1000,
     noPrtFolio: parseInt(modalForm.noPrtFolio) || 10,
@@ -1535,17 +1561,73 @@ const fetchDeribitInstruments = async (type = 'option') => {
                   <input type="text" value={modalForm.symbol} onChange={(e) => setModalForm({...modalForm, symbol: e.target.value})} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }} />
                 </div>
 
-                {modalForm.strategy !== 'C-F/F' && (
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Option Expiry</label>
-                    <select value={modalForm.optionExpiry} onChange={(e) => setModalForm({ ...modalForm, optionExpiry: e.target.value })} disabled={!modalForm.exchange || isLoadingExpiries} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}>
-                      <option value="">{!modalForm.exchange ? 'Select exchange first' : (isLoadingExpiries ? 'Loading...' : '--Select--')}</option>
-                      {(availableData[modalForm.exchange]?.expiries || []).map(exp => (
-                        <option key={exp} value={exp}>{exp}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
+                {modalForm.strategy === 'Jelly' && (
+  <>
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Option Expiry</label>
+      <select 
+        value={modalForm.optionExpiry} 
+        onChange={(e) => setModalForm({ ...modalForm, optionExpiry: e.target.value })} 
+        disabled={!modalForm.exchange || isLoadingExpiries} 
+        style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+      >
+        <option value="">{!modalForm.exchange ? 'Select exchange first' : (isLoadingExpiries ? 'Loading...' : '--Select--')}</option>
+        {(availableData[modalForm.exchange]?.optionExpiries || []).map(exp => (
+          <option key={exp} value={exp}>{exp}</option>
+        ))}
+      </select>
+    </div>
+    
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Future Expiry</label>
+      <select 
+        value={modalForm.futureExpiry} 
+        onChange={(e) => setModalForm({ ...modalForm, futureExpiry: e.target.value })} 
+        disabled={!modalForm.exchange || isLoadingExpiries} 
+        style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+      >
+        <option value="">{!modalForm.exchange ? 'Select exchange first' : (isLoadingExpiries ? 'Loading...' : '--Select--')}</option>
+        {(availableData[modalForm.exchange]?.futureExpiries || []).map(exp => (
+          <option key={exp} value={exp}>{exp}</option>
+        ))}
+      </select>
+    </div>
+  </>
+)}
+
+{modalForm.strategy === 'Synthetic' && (
+  <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Expiry (Option & Future)</label>
+    <select 
+      value={modalForm.optionExpiry} 
+      onChange={(e) => setModalForm({ ...modalForm, optionExpiry: e.target.value })} 
+      disabled={!modalForm.exchange || isLoadingExpiries} 
+      style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+    >
+      <option value="">{!modalForm.exchange ? 'Select exchange first' : (isLoadingExpiries ? 'Loading...' : '--Select--')}</option>
+      {(availableData[modalForm.exchange]?.optionExpiries || []).map(exp => (
+        <option key={exp} value={exp}>{exp}</option>
+      ))}
+    </select>
+  </div>
+)}
+
+{!['C-F/F', 'Jelly', 'Synthetic'].includes(modalForm.strategy) && modalForm.strategy !== '' && (
+  <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Option Expiry</label>
+    <select 
+      value={modalForm.optionExpiry} 
+      onChange={(e) => setModalForm({ ...modalForm, optionExpiry: e.target.value })} 
+      disabled={!modalForm.exchange || isLoadingExpiries} 
+      style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+    >
+      <option value="">{!modalForm.exchange ? 'Select exchange first' : (isLoadingExpiries ? 'Loading...' : '--Select--')}</option>
+      {(availableData[modalForm.exchange]?.optionExpiries || []).map(exp => (
+        <option key={exp} value={exp}>{exp}</option>
+      ))}
+    </select>
+  </div>
+)}
   
 
                 <div style={{ display: 'flex', flexDirection: 'column' }}>

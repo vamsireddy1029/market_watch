@@ -376,7 +376,6 @@ class BybitConnector {
               console.log(`✅ Matched: ${opt.symbol}`);
               return true;
             }
-            
             return false;
           });
           
@@ -622,10 +621,16 @@ class BybitConnector {
       if (!symbol) return;
 
       const upperSymbol = symbol.toUpperCase();
-      const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2,4}-\d{3,6}-[CP](-USDT)?$/i.test(upperSymbol);
+      
+      // ✅ Normalize Bybit option symbol: Remove -USDT suffix for storage
+      let normalizedSymbol = symbol;
+      if (upperSymbol.endsWith('-USDT')) {
+        normalizedSymbol = symbol.slice(0, -5); // Remove '-USDT'
+      }
+      
+      const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2,4}-\d{3,6}-[CP]$/i.test(normalizedSymbol);
       const isFuture = /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/i.test(upperSymbol);
       const isSpotOrderbook = topic && topic.startsWith('orderbook.');
-
       let instrumentType;
       if (forcedType) {
         instrumentType = forcedType;

@@ -280,6 +280,8 @@ app.post('/api/stop-streaming', async (req, res) => {
 
 // ==================== Strategy Endpoints ====================
 
+// In server.js - Update the /api/strategy/add endpoint
+
 app.post('/api/strategy/add', async (req, res) => {
   try {
     const { tableId, config } = req.body;
@@ -303,19 +305,65 @@ app.post('/api/strategy/add', async (req, res) => {
       broadcastMarketData(key, data);
     };
     
-    const connectorConfig = {
-      isMetadataFetch: false,
-      instrumentType: config.strategy.toLowerCase() === 'c-f/f' ? 'future' : 'option',
-      expiry: config.strategy.toLowerCase() === 'c-f/f' ? config.futureExpiry : config.optionExpiry,
-      strikeInterval: config.strikeInterval,
-      noPrtFolio: config.noPrtFolio,
-      strategy: config.strategy,
-      futureExpiry: config.futureExpiry
-    };
-    
-    const connector = getConnector(exchange, onData, () => {});
-    await connector.connect(connectorConfig);
-    strategyConnectors[tableId] = connector;
+    // ✅ NEW: Handle Jelly strategy separately
+    if (config.strategy.toLowerCase() === 'jelly') {
+      console.log('🎯 Setting up Jelly strategy with dual subscriptions...');
+      
+      // Subscribe to OPTIONS
+      const optionConnectorConfig = {
+        isMetadataFetch: false,
+        instrumentType: 'option',
+        expiry: config.optionExpiry,
+        strikeInterval: config.strikeInterval,
+        noPrtFolio: config.noPrtFolio,
+        strategy: config.strategy
+      };
+      
+      const optionConnector = getConnector(exchange, onData, () => {});
+      await optionConnector.connect(optionConnectorConfig);
+      strategyConnectors[`${tableId}_option`] = optionConnector;
+      
+      // Subscribe to FUTURES
+      const futureConnectorConfig = {
+        isMetadataFetch: false,
+        instrumentType: 'future',
+        futureExpiry: config.futureExpiry,
+        strategy: config.strategy
+      };
+      
+      // ✅ Wait a bit before second connection
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      const futureConnector = getConnector(exchange, onData, () => {});
+      await futureConnector.connect(futureConnectorConfig);
+      strategyConnectors[`${tableId}_future`] = futureConnector;
+      
+    } else {
+      // Original logic for other strategies
+      let instrumentType, expiryToSubscribe;
+      
+      if (config.strategy.toLowerCase() === 'c-f/f') {
+        instrumentType = 'future';
+        expiryToSubscribe = config.futureExpiry || config.fut1Expiry;
+      } else {
+        instrumentType = 'option';
+        expiryToSubscribe = config.optionExpiry;
+      }
+      
+      const connectorConfig = {
+        isMetadataFetch: false,
+        instrumentType: instrumentType,
+        expiry: expiryToSubscribe,
+        strikeInterval: config.strikeInterval,
+        noPrtFolio: config.noPrtFolio,
+        strategy: config.strategy,
+        futureExpiry: config.futureExpiry
+      };
+      
+      const connector = getConnector(exchange, onData, () => {});
+      await connector.connect(connectorConfig);
+      strategyConnectors[tableId] = connector;
+    }
     
     startStrategyUpdates();
 
@@ -331,7 +379,6 @@ app.post('/api/strategy/add', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 app.post('/api/strategy/remove', (req, res) => {
   try {
     const { tableId } = req.body;

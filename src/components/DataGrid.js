@@ -1,33 +1,40 @@
+
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Search } from "lucide-react";
 import "./DataGrid.css";
 
-const DataGrid = ({ marketData }) => {
-  const [sortConfig, setSortConfig] = useState({
-    deribit: { key: null, direction: "asc" },
-    binance: { key: null, direction: "asc" },
-    bybit: { key: null, direction: "asc" },
-  });
+const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
+  const [sortConfig, setSortConfig] = useState({});
   const [filterText, setFilterText] = useState("");
   const previousDataRef = useRef({});
 
   const dataEntries = Object.values(marketData || {});
 
-  // Group by exchange
+  // Group by exchange instance
   const grouped = useMemo(() => {
     const g = {};
     dataEntries.forEach((row) => {
-      if (!g[row.exchange]) g[row.exchange] = [];
-      g[row.exchange].push(row);
+      const exchangeKey = row.exchange;
+      if (!g[exchangeKey]) g[exchangeKey] = [];
+      g[exchangeKey].push(row);
     });
+    
+    // ✅ FIX: Ensure all selected exchanges have a group, even if empty
+    selectedExchanges?.forEach(ex => {
+      if (!g[ex]) g[ex] = [];
+    });
+    
     return g;
-  }, [dataEntries]);
+  }, [dataEntries, selectedExchanges]);
 
   // Determine columns dynamically
-  const columnsByExchange = useMemo(() => {
+    const columnsByExchange = useMemo(() => {
     const colMap = {};
     Object.entries(grouped).forEach(([ex, rows]) => {
-      if (rows.length === 0) return;
+      if (rows.length === 0) {
+        colMap[ex] = ['instrument', 'last_price', 'mark_price', 'best_bid_price', 'best_ask_price'];
+        return;
+      }
       colMap[ex] = Object.keys(rows[0]).filter((k) => k !== "exchange" && k !== "type");
     });
     return colMap;
@@ -59,16 +66,46 @@ const DataGrid = ({ marketData }) => {
       }
     });
     previousDataRef.current = { ...newData };
-    console.log("DataGrid received marketData:", marketData);
   }, [marketData]);
 
-  // Spot price detection
-  const getSpotPrice = (rows, exchange) => {
-    if (!rows || rows.length === 0) return null;
-    const ex = (exchange || '').toLowerCase();
+  // Get friendly exchange name
+  const getExchangeDisplayName = (exchangeKey) => {
+  const parts = exchangeKey.split('_');
+  const baseExchange = parts[0];
+  
+  // Check if exchangeKey has symbol suffix (e.g., deribit_btc, deribit_eth)
+  if (baseExchange === 'deribit' && parts.length > 1) {
+    const symbolSuffix = parts[1].toUpperCase();
+    if (symbolSuffix === 'BTC' || symbolSuffix === 'ETH') {
+      return `Deribit ${symbolSuffix}`;
+    }
+  }
+  
+  // Fallback: check config
+  const config = appliedConfig?.[exchangeKey];
+  if (baseExchange === 'deribit' && config?.symbol) {
+    return `Deribit ${config.symbol}`;
+  }
+    
+    const names = {
+      'binance': 'Binance',
+      'bybit': 'Bybit'
+    };
+    
+    return names[baseExchange] || baseExchange;
+  };
 
-    if (ex === 'deribit') {
-      const perp = rows.find((r) => (r.instrument || '').toUpperCase() === 'BTC-PERPETUAL');
+  // Spot price detection with symbol support
+  const getSpotPrice = (rows, exchangeKey) => {
+    if (!rows || rows.length === 0) return null;
+    
+    const baseExchange = exchangeKey.split('_')[0].toLowerCase();
+    const config = appliedConfig?.[exchangeKey];
+    const symbol = (config?.symbol || 'BTC').toUpperCase();
+
+    if (baseExchange === 'deribit') {
+      const perpInstrument = `${symbol}-PERPETUAL`;
+      const perp = rows.find((r) => (r.instrument || '').toUpperCase() === perpInstrument);
       if (perp) {
         const val = parseFloat(perp.mark_price ?? perp.last_price);
         return Number.isFinite(val) ? val.toFixed(2) : null;
@@ -76,7 +113,7 @@ const DataGrid = ({ marketData }) => {
       return null;
     }
 
-    if (ex === 'binance' || ex === 'bybit') {
+    if (baseExchange === 'binance' || baseExchange === 'bybit') {
       // Spot first
       const spot = rows.find((r) =>
         (r?.type || '').toLowerCase() === 'spot' && (r.instrument || '').toLowerCase().startsWith('btcusdt')
@@ -104,7 +141,7 @@ const DataGrid = ({ marketData }) => {
       ...prevConfig,
       [exchange]: {
         key,
-        direction: prevConfig[exchange].direction === "asc" ? "desc" : "asc",
+        direction: prevConfig[exchange]?.direction === "asc" ? "desc" : "asc",
       },
     }));
   };
@@ -154,8 +191,8 @@ const DataGrid = ({ marketData }) => {
       </div>
 
       <div className="tables-grid">
-        {Object.entries(grouped).map(([exchange, rows]) => {
-          const columns = columnsByExchange[exchange] || [];
+        {Object.entries(grouped).map(([exchangeKey, rows]) => {
+          const columns = columnsByExchange[exchangeKey] || [];
 
           // Filter by search text
           const filtered = rows.filter((r) =>
@@ -168,9 +205,9 @@ const DataGrid = ({ marketData }) => {
           );
 
           // Apply configured column sorting
-          const config = sortConfig[exchange];
+          const config = sortConfig[exchangeKey];
           const sorted = [...filtered];
-          if (config.key && columns.includes(config.key)) {
+          if (config?.key && columns.includes(config.key)) {
             sorted.sort((a, b) => {
               const aValue = a[config.key];
               const bValue = b[config.key];
@@ -185,13 +222,21 @@ const DataGrid = ({ marketData }) => {
             });
           }
 
+          const displayName = getExchangeDisplayName(exchangeKey);
+          const spotPrice = getSpotPrice(rows, exchangeKey);
+          
+          // ✅ Determine if using Spot or Perpetual
+          const baseExchange = exchangeKey.split('_')[0].toLowerCase();
+          const spotType = baseExchange === 'binance' ? 'S' : 'P';
+          const spotLabel = baseExchange === 'binance' ? 'Spot' : 'Perpetual';
+
           return (
-            <div key={exchange} className="exchange-table">
+            <div key={exchangeKey} className="exchange-table">
               <div className="exchange-table-header">
-                <h3 className="exchange-table-title">{exchange}</h3>
-                {getSpotPrice(rows, exchange) && (
+                <h3 className="exchange-table-title">{displayName}</h3>
+                {spotPrice && (
                   <span className="spot-value">
-                    Spot: ${getSpotPrice(rows, exchange)}
+                    {spotLabel} ({spotType}): ${spotPrice}
                   </span>
                 )}
               </div>
@@ -202,16 +247,16 @@ const DataGrid = ({ marketData }) => {
                       {columns.map((col) => (
                         <th
                           key={col}
-                          onClick={() => handleSort(exchange, col)}
+                          onClick={() => handleSort(exchangeKey, col)}
                         >
-                          {col.replace(/_/g, " ")} {getSortIcon(exchange, col)}
+                          {col.replace(/_/g, " ")} {getSortIcon(exchangeKey, col)}
                         </th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {sorted.map((row) => {
-                      const rowKey = `${exchange}_${row.instrument}`;
+                      const rowKey = `${exchangeKey}_${row.instrument}`;
                       return (
                         <tr key={rowKey}>
                           {columns.map((col) => (

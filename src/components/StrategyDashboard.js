@@ -32,8 +32,8 @@ const StrategyDashboard = () => {
     futureExpiry: '',
     fut1Expiry: 'all',  
     fut2Expiry: 'all',  
-    strikeInterval: '1000',
-    gap: '1000',
+    strikeInterval: '1000',  // This will be overridden dynamically
+    gap: '1000',              // This will be overridden dynamically
     noPrtFolio: '10',
     ratio1: '1',
     ratio2: '2',
@@ -636,10 +636,24 @@ const handleAddCFFRow = async () => {
   // ================================
   // C-F/F STRATEGY (GENERIC TABLE)
   // ================================
-  if (isCFF) {
+ if (isCFF) {
     const headers = filteredData.length > 0 && !Object.keys(filteredData[0]).includes('exchange')
       ? ['exchange', ...Object.keys(filteredData[0])]
       : Object.keys(filteredData[0] || {});
+
+    // Sort data by fut1 and fut2 expiry dates
+    const sortedData = [...filteredData].sort((a, b) => {
+      const dateA1 = parseExpiryDate(a.fut1);
+      const dateB1 = parseExpiryDate(b.fut1);
+      
+      if (dateA1.getTime() !== dateB1.getTime()) {
+        return dateA1 - dateB1;
+      }
+      
+      const dateA2 = parseExpiryDate(a.fut2);
+      const dateB2 = parseExpiryDate(b.fut2);
+      return dateA2 - dateB2;
+    });
 
     return (
       <div style={{ position: 'relative' }}>
@@ -672,7 +686,7 @@ const handleAddCFFRow = async () => {
             </tr>
           </thead>
           <tbody>
-            {filteredData.map((row, idx) => (
+            {sortedData.map((row, idx) => (
               <tr key={idx} style={{ background: idx % 2 === 0 ? 'white' : '#f9f9f9' }}>
                 {headers.map(header => {
                   let val = row[header];
@@ -967,7 +981,21 @@ const handleAddCFFRow = async () => {
       console.error('Failed to delete configuration:', error);
     }
   };
-
+  useEffect(() => {
+  if (modalForm.symbol === 'ETH') {
+    setModalForm(prev => ({
+      ...prev,
+      strikeInterval: prev.strikeInterval === '1000' ? '50' : prev.strikeInterval,
+      gap: prev.gap === '1000' ? '50' : prev.gap
+    }));
+  } else if (modalForm.symbol === 'BTC') {
+    setModalForm(prev => ({
+      ...prev,
+      strikeInterval: prev.strikeInterval === '50' ? '1000' : prev.strikeInterval,
+      gap: prev.gap === '50' ? '1000' : prev.gap
+    }));
+  }
+}, [modalForm.symbol]);
   useEffect(() => {
     let reconnectTimer = null;
 
@@ -1126,13 +1154,18 @@ const fetchBybitInstruments = async (type = 'option') => {
     setIsLoadingExpiries(false);
   }
 };
+// Update around line 847-888
 const fetchDeribitInstruments = async (type = 'option') => {
   try {
     setIsLoadingExpiries(true);
     const response = await fetch('http://localhost:8080/api/fetch-metadata', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ exchange: 'deribit', instrumentType: type })
+      body: JSON.stringify({ 
+        exchange: 'deribit', 
+        instrumentType: type,
+        symbol: modalForm.symbol || 'BTC'  // ✅ ADD THIS
+      })
     });
     
     const result = await response.json();
@@ -1146,7 +1179,7 @@ const fetchDeribitInstruments = async (type = 'option') => {
         }
       }));
       
-      console.log('✅ Deribit metadata loaded:', result.metadata);
+      console.log(`✅ Deribit ${modalForm.symbol} metadata loaded:`, result.metadata);
       console.log('📊 Future expiries:', result.metadata.futureExpiries);
       console.log('📊 Option expiries:', result.metadata.optionExpiries);
       
@@ -1170,52 +1203,51 @@ const fetchDeribitInstruments = async (type = 'option') => {
   }
 };
 
-  useEffect(() => {
-  const ex = modalForm.exchange;
-  const strategy = modalForm.strategy;
+  // Add this useEffect after the existing useEffect around line 765
+// Fetch metadata when exchange or strategy changes
+useEffect(() => {
+  if (!modalForm.exchange || !showModal) return;
   
-  if (!ex) return;
-
-  const isCFF = strategy === 'C-F/F';
-  const isJelly = strategy === 'Jelly';
-  
-  // ✅ NEW: Jelly needs BOTH option and future metadata
-  if (isJelly) {
-    const hasOptionData = availableData[ex]?.optionExpiries?.length > 0;
-    const hasFutureData = availableData[ex]?.futureExpiries?.length > 0;
+  const fetchMetadata = async () => {
+    const isCFF = modalForm.strategy === 'C-F/F';
+    const isJelly = modalForm.strategy === 'Jelly';
+    const isSynthetic = modalForm.strategy === 'Synthetic';
     
-    if (!hasOptionData) {
-      if (ex === 'deribit') fetchDeribitInstruments('option');
-      else if (ex === 'binance') fetchBinanceInstruments('option');
-      else if (ex === 'bybit') fetchBybitInstruments('option');
-    }
-    
-    if (!hasFutureData) {
-      setTimeout(() => {
-        if (ex === 'deribit') fetchDeribitInstruments('future');
-        else if (ex === 'binance') fetchBinanceInstruments('future');
-        else if (ex === 'bybit') fetchBybitInstruments('future');
-      }, 500);
-    }
-  } else {
-    // Original logic for other strategies
-    const instrumentType = isCFF ? 'future' : 'option';
-    
-    const hasData = isCFF 
-      ? (availableData[ex]?.futureExpiries?.length > 0)
-      : (availableData[ex]?.optionExpiries?.length > 0);
-
-    if (!hasData) {
-      if (ex === 'deribit') {
-        fetchDeribitInstruments(instrumentType);
-      } else if (ex === 'binance') {
-        fetchBinanceInstruments(instrumentType);
-      } else if (ex === 'bybit') {
-        fetchBybitInstruments(instrumentType);
+    if (modalForm.exchange === 'deribit') {
+      if (isJelly || isSynthetic) {
+        await fetchDeribitInstruments('option');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await fetchDeribitInstruments('future');
+      } else if (isCFF) {
+        await fetchDeribitInstruments('future');
+      } else if (modalForm.strategy) {
+        await fetchDeribitInstruments('option');
+      }
+    } else if (modalForm.exchange === 'binance') {
+      if (isJelly || isSynthetic) {
+        await fetchBinanceInstruments('option');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await fetchBinanceInstruments('future');
+      } else if (isCFF) {
+        await fetchBinanceInstruments('future');
+      } else if (modalForm.strategy) {
+        await fetchBinanceInstruments('option');
+      }
+    } else if (modalForm.exchange === 'bybit') {
+      if (isJelly || isSynthetic) {
+        await fetchBybitInstruments('option');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await fetchBybitInstruments('future');
+      } else if (isCFF) {
+        await fetchBybitInstruments('future');
+      } else if (modalForm.strategy) {
+        await fetchBybitInstruments('option');
       }
     }
-  }
-}, [modalForm.exchange, modalForm.strategy]);
+  };
+  
+  fetchMetadata();
+}, [modalForm.exchange, modalForm.strategy, showModal]);
 
   const addTable = () => {
     const newTable = {
@@ -1451,44 +1483,157 @@ const applyStrategy = async () => {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))', gap: '20px' }}>
-        {tables.map((table, index) => (
-          <div key={table.id} style={{ background: 'white', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '12px 15px', background: '#f8f9fa', borderBottom: '1px solid #dee2e6' }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 'bold', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ color: '#3b82f6', fontWeight: 600 }}>
-                    {table.config.exchange?.toUpperCase()}
-                  </span>
-                  {table.config.strategy || 'Strategy'} {table.config.gap ? `${table.config.gap}` : ''}
-                  {table.liveData && (
-                    <span style={{ background: '#9fd5e7', color: 'black', padding: '2px 8px', borderRadius: '4px', fontSize: '11px' }}>
-                      {table.liveData.ltp?.toFixed(2)}
-                    </span>
-                  )}
-                </div>
-                <div style={{ fontSize: '12px', color: '#666', marginTop: '4px' }}>
-                  {table.config.symbol}
-                  {table.config.optionExpiry && ` ${table.config.optionExpiry} (O)`}
-                  {table.config.futureExpiry && (table.config.strategy === 'Jelly') && ` ${table.config.futureExpiry} (F)`}
-                </div>
-                {table.liveData && (
-                  <div style={{ fontSize: '10px', color: '#999', marginTop: '2px' }}>{table.liveData.timestamp}</div>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: '5px' }}>
-                <button onClick={() => openSettings(index)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 8px', fontSize: '14px' }}>
-                  ⚙️
-                </button>
-                <button onClick={() => removeTable(table.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 8px', fontSize: '14px', color: '#e74c3c' }}>
+        
+{tables.map((table, index) => (
+  <div key={table.id} style={{ 
+    background: 'white', 
+    borderRadius: '8px', 
+    boxShadow: '0 2px 8px rgba(0,0,0,0.1)', 
+    overflow: 'hidden' 
+  }}>
+    {/* Single Header Row with Exchange, Strategy, Symbol, Spot Value */}
+    <div style={{ 
+      display: 'flex', 
+      justifyContent: 'space-between', 
+      alignItems: 'center', 
+      padding: '12px 15px', 
+      background: '#f8f9fa', 
+      borderBottom: '1px solid #dee2e6' 
+    }}>
+      {/* Left Section - Exchange, Strategy, Symbol, Spot */}
+      <div style={{ 
+        display: 'flex', 
+        alignItems: 'center', 
+        gap: '12px',
+        flex: 1 
+      }}>
+        {/* Exchange */}
+        <span style={{ 
+          color: '#3b82f6', 
+          fontWeight: 700,
+          fontSize: '14px'
+        }}>
+          {table.config.exchange?.toUpperCase() || 'N/A'}
+        </span>
+        
+        {/* Divider */}
+        <span style={{ color: '#dee2e6' }}>|</span>
+        
+        {/* Strategy */}
+        <span style={{ 
+          fontWeight: 600,
+          fontSize: '14px',
+          color: '#374151'
+        }}>
+          {table.config.strategy || 'Strategy'}
+        </span>
+        
+        {/* Divider */}
+        <span style={{ color: '#dee2e6' }}>|</span>
+        
+        {/* Symbol Badge */}
+        <span style={{ 
+          background: '#e0e7ff',
+          color: '#4f46e5',
+          padding: '4px 10px',
+          borderRadius: '4px',
+          fontSize: '12px',
+          fontWeight: 600
+        }}>
+          {table.config.symbol || 'BTC'}
+        </span>
+        
+        {/* Spot Value */}
+        {/* Spot Value with S/P Badge */}
+        {table.liveData && (
+          <>
+            <span style={{ color: '#dee2e6' }}>|</span>
+            <div style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '6px',
+              background: '#f0fdf4',
+              padding: '4px 10px',
+              borderRadius: '4px'
+            }}>
+              <span style={{ 
+                background: table.config.exchange === 'binance' ? '#27ae60' : '#3498db',
+                color: 'white',
+                padding: '2px 5px',
+                borderRadius: '3px',
+                fontSize: '9px',
+                fontWeight: 'bold'
+              }}>
+                {table.config.exchange === 'binance' ? 'S' : 'P'}
+              </span>
+              <span style={{ 
+                fontSize: '13px', 
+                fontWeight: 700,
+                color: '#16a34a'
+              }}>
+                ${table.liveData.ltp?.toFixed(2) || '0.00'}
+              </span>
+            </div>
+          </>
+        )}
+        
+        {/* Expiry Info (if needed) */}
+        {(table.config.optionExpiry || table.config.futureExpiry) && (
+          <span style={{ 
+            fontSize: '11px', 
+            color: '#6b7280',
+            marginLeft: '4px'
+          }}>
+            {table.config.optionExpiry && `${table.config.optionExpiry} (O)`}
+            {table.config.futureExpiry && table.config.strategy === 'Jelly' && ` ${table.config.futureExpiry} (F)`}
+          </span>
+        )}
+      </div>
+      
+      {/* Right Section - Action Buttons */}
+      <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
+        <button 
+          onClick={() => openSettings(index)} 
+          style={{ 
+            background: 'transparent', 
+            border: 'none', 
+            cursor: 'pointer', 
+            padding: '4px 8px', 
+            fontSize: '14px',
+            transition: 'transform 0.2s'
+          }}
+          onMouseEnter={(e) => e.target.style.transform = 'scale(1.1)'}
+          onMouseLeave={(e) => e.target.style.transform = 'scale(1)'}
+        >
+          ⚙️
+        </button>
+        <button onClick={() => removeTable(table.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 8px', fontSize: '14px', color: '#e74c3c' }}>
                   ✕
                 </button>
-              </div>
-            </div>
-            <div style={{ padding: '10px', maxHeight: '400px', overflowY: 'auto' }}>
-              {renderTable(table)}
-            </div>
-          </div>
-        ))}
+      </div>
+    </div>
+    
+    {/* Table Content */}
+    <div style={{ 
+      padding: '10px', 
+      maxHeight: '400px', 
+      overflowY: 'auto' 
+    }}>
+      {table.isLoading ? (
+        <div style={{ 
+          textAlign: 'center', 
+          padding: '40px', 
+          color: '#6b7280',
+          fontSize: '14px'
+        }}>
+          Loading strategy data...
+        </div>
+      ) : (
+        renderTable(table)
+      )}
+    </div>
+  </div>
+))}
       </div>
 
       {showSaveDialog && (
@@ -1555,11 +1700,26 @@ const applyStrategy = async () => {
                     <option value="C-F/F">C-F/F (Cash-Future/Future)</option>
                   </select>
                 </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Symbol</label>
-                  <input type="text" value={modalForm.symbol} onChange={(e) => setModalForm({...modalForm, symbol: e.target.value})} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }} />
-                </div>
+<div style={{ display: 'flex', flexDirection: 'column' }}>
+  <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Symbol</label>
+  {modalForm.exchange === 'deribit' ? (
+    <select 
+      value={modalForm.symbol} 
+      onChange={(e) => setModalForm({...modalForm, symbol: e.target.value})}
+      style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+    >
+      <option value="BTC">BTC</option>
+      <option value="ETH">ETH</option>
+    </select>
+  ) : (
+    <input 
+      type="text" 
+      value={modalForm.symbol} 
+      onChange={(e) => setModalForm({...modalForm, symbol: e.target.value})} 
+      style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }} 
+    />
+  )}
+</div>
 
                 {modalForm.strategy === 'Jelly' && (
   <>
@@ -1732,6 +1892,9 @@ const applyStrategy = async () => {
               fetchDeribitInstruments('future');
             } else if (selectedEx === 'binance' && (!availableData.binance.futureExpiries || availableData.binance.futureExpiries.length === 0)) {
               fetchBinanceInstruments('future');
+            }
+            else if (selectedEx === 'bybit' && (!availableData.bybit.futureExpiries || availableData.bybit.futureExpiries.length === 0)) {
+              fetchBybitInstruments('future');
             }
           }}
           style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}

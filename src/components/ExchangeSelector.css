@@ -24,7 +24,7 @@
 
 .exchange-row {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 15px;
 }
 
@@ -34,13 +34,14 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 20px 15px;
+  padding: 16px 12px;
   border: 2px solid #e0e0e0;
   border-radius: 12px;
   background: white;
   cursor: pointer;
   transition: all 0.3s ease;
   font-family: inherit;
+  min-height: 100px;
 }
 
 .exchange-button:hover:not(:disabled) {
@@ -95,13 +96,14 @@
 
 .exchange-name {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
   color: #2c3e50;
   text-align: center;
+  word-break: break-word;
 }
 
 .exchange-type {
-  font-size: 11px;
+  font-size: 10px;
   color: #7f8c8d;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -154,7 +156,7 @@
 
 .config-row {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 20px;
 }
 
@@ -178,11 +180,12 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .config-title-row h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
   color: #2c3e50;
 }
@@ -198,9 +201,9 @@
 
 .config-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 15px;
-  margin-bottom: 15px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .form-group {
@@ -209,7 +212,7 @@
 }
 
 .form-group label {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: #555;
   margin-bottom: 6px;
@@ -217,10 +220,10 @@
 
 .form-group select,
 .form-group input {
-  padding: 10px;
+  padding: 8px;
   border: 1px solid #ddd;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 13px;
   font-family: inherit;
   transition: border-color 0.2s;
 }
@@ -243,23 +246,26 @@
 
 .options-row {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: flex-end;
+  flex-wrap: wrap;
 }
 
 .options-row .form-group {
   flex: 1;
+  min-width: 120px;
 }
 
 .btn {
-  padding: 10px 20px;
+  padding: 8px 16px;
   border: none;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.2s;
   font-family: inherit;
+  white-space: nowrap;
 }
 
 .btn-start {
@@ -286,46 +292,95 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
   width: 100%;
-  margin-top: 16px;
+  margin-top: 12px;
 }
 
 .action-buttons button {
   flex: 1;
-  height: 48px;
-  font-size: 16px;
-  border-radius: 8px;
+  height: 40px;
+  font-size: 14px;
+  border-radius: 6px;
   border: none;
   cursor: pointer;
   color: #fff;
   font-weight: 600;
+  transition: background 0.2s;
 }
 
 .action-buttons .submit-btnn {
-  background-color: #166534; /* dark green */
+  background-color: #166534;
 }
 
 .action-buttons .submit-btnn:hover {
-  background-color: #15803d; /* hover green */
+  background-color: #15803d;
 }
 
 .action-buttons .exit-btnn {
-  background-color: #b91c1c; /* red */
+  background-color: #b91c1c;
 }
 
 .action-buttons .exit-btnn:hover {
-  background-color: #dc2626; /* hover red */
+  background-color: #dc2626;
 }
 
-
-@media (max-width: 768px) {
+/* Tablet breakpoint */
+@media (max-width: 1024px) {
   .exchange-row {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 12px;
+  }
+
+  .config-row {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  }
+
+  .selector-card,
+  .exchange-config-card {
+    padding: 16px;
+  }
+}
+
+/* Mobile breakpoint */
+@media (max-width: 768px) {
+  .selector-card,
+  .exchange-config-card {
+    padding: 14px;
+  }
+
+  .selector-header h2 {
+    font-size: 18px;
+  }
+
+  .exchange-row {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 10px;
+  }
+
+  .exchange-button {
+    padding: 12px 8px;
+    min-height: 90px;
+  }
+
+  .exchange-name {
+    font-size: 12px;
+  }
+
+  .exchange-type {
+    font-size: 9px;
   }
 
   .config-row {
     grid-template-columns: 1fr;
+  }
+
+  .config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .config-title-row h3 {
+    font-size: 15px;
   }
 
   .options-row {
@@ -333,4 +388,135 @@
     align-items: stretch;
   }
 
+  .options-row .form-group {
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .btn {
+    width: 100%;
+  }
 }
+
+/* Small mobile breakpoint */
+@media (max-width: 480px) {
+  .selector-card,
+  .exchange-config-card {
+    padding: 12px;
+  }
+
+  .selector-header h2 {
+    font-size: 16px;
+  }
+
+  .exchange-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+
+  .exchange-button {
+    padding: 10px 6px;
+    min-height: 80px;
+  }
+
+  .exchange-name {
+    font-size: 11px;
+  }
+
+  .exchange-dot {
+    width: 10px;
+    height: 10px;
+  }
+
+  .check-badge {
+    width: 18px;
+    height: 18px;
+    font-size: 11px;
+  }
+
+  .config-grid {
+    gap: 10px;
+  }
+
+  .form-group label {
+    font-size: 10px;
+  }
+
+  .form-group select,
+  .form-group input {
+    padding: 6px;
+    font-size: 12px;
+  }
+
+  .action-buttons button {
+    height: 38px;
+    font-size: 13px;
+  }
+}
+
+/* Extra small screens */
+@media (max-width: 360px) {
+  .exchange-button {
+    min-height: 70px;
+    padding: 8px 4px;
+  }
+
+  .exchange-name {
+    font-size: 10px;
+  }
+}
+
+/* Add this to your existing ExchangeSelector.css */
+
+.add-instance-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.2);
+}
+
+.add-instance-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+  background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+}
+
+.add-instance-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(102, 126, 234, 0.2);
+}
+
+.config-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.config-title-row > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Update existing expiry-badge */
+.expiry-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+

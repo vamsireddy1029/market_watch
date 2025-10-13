@@ -18,17 +18,17 @@ class StrategyCalculator {
 
   // In StrategyCalculator.js - Only the relevant methods
 
-getSpotPrice(exchange) {
+getSpotPrice(exchange, symbol = 'BTC') {  // ✅ ADD symbol parameter
   const ex = exchange.toLowerCase();
+  const sym = symbol.toUpperCase();
   
-  // ✅ Support all three exchanges
   let perpetualKey;
   if (ex === 'binance') {
     perpetualKey = 'binance_btcusdt';
   } else if (ex === 'deribit') {
-    perpetualKey = 'deribit_BTC-PERPETUAL';
+    perpetualKey = `deribit_${sym}-PERPETUAL`;  // ✅ CHANGE THIS
   } else if (ex === 'bybit') {
-    perpetualKey = 'bybit_btcusdt';  // NEW
+    perpetualKey = 'bybit_btcusdt';
   } else {
     console.log(`❌ Unknown exchange: ${ex}`);
     return 0;
@@ -53,19 +53,19 @@ getSpotPrice(exchange) {
   console.log(`❌ getSpotPrice: ${perpetualKey} not found or invalid`);
   return 0;
 }
-
-getFuturePrice(exchange, futureExpiry) {
+getFuturePrice(exchange, futureExpiry, symbol = 'BTC') {
   const ex = exchange.toLowerCase();
+  const sym = symbol.toUpperCase();
 
   // If no futureExpiry, return perpetual
   if (!futureExpiry) {
     let perpetualKey;
     if (ex === 'binance') {
-      perpetualKey = 'binance_btcusdt';
+      perpetualKey = `binance_${sym.toLowerCase()}usdt`;
     } else if (ex === 'deribit') {
-      perpetualKey = 'deribit_BTC-PERPETUAL';
+      perpetualKey = `deribit_${sym}-PERPETUAL`;
     } else if (ex === 'bybit') {
-      perpetualKey = 'bybit_btcusdt';  // NEW
+      perpetualKey = `bybit_${sym.toLowerCase()}usdt`;
     } else {
       return { bid: 0, ask: 0, mid: 0 };
     }
@@ -81,14 +81,14 @@ getFuturePrice(exchange, futureExpiry) {
     return { bid: 0, ask: 0, mid: 0 };
   }
   
-  // ✅ Build correct key for each exchange
+  // ✅ Build correct key for each exchange with symbol support
   let key;
   if (ex === 'binance') {
-    key = `binance_btcusdt_${futureExpiry}`.toLowerCase();
+    key = `binance_${sym.toLowerCase()}usdt_${futureExpiry}`.toLowerCase();
   } else if (ex === 'deribit') {
-    key = `deribit_BTC-${futureExpiry}`;
+    key = `deribit_${sym}-${futureExpiry}`;
   } else if (ex === 'bybit') {
-    key = `bybit_btcusdt-${futureExpiry}`.toLowerCase();  // NEW
+    key = `bybit_${sym.toLowerCase()}usdt-${futureExpiry}`.toLowerCase();
   } else {
     return { bid: 0, ask: 0, mid: 0 };
   }
@@ -108,26 +108,27 @@ getFuturePrice(exchange, futureExpiry) {
   return { bid: 0, ask: 0, mid: 0 };
 }
 
-getAllFutureExpiries(exchange) {
+
+getAllFutureExpiries(exchange, symbol = 'BTC') {
   const ex = exchange.toLowerCase();
+  const sym = symbol.toUpperCase();
   const expiries = new Set();
   
   for (const [key, val] of Object.entries(this.marketData)) {
     if (!val || !key.startsWith(`${ex}_`)) continue;
     
     if (ex === 'deribit') {
-      const match = key.match(/^deribit_BTC-(\d{1,2}[A-Z]{3}\d{2})$/i);
+      const match = key.match(new RegExp(`^deribit_${sym}-(\\d{1,2}[A-Z]{3}\\d{2})$`, 'i'));
       if (match && !key.includes('PERPETUAL')) {
         expiries.add(match[1].toUpperCase());
       }
     } else if (ex === 'binance') {
-      const match = key.match(/^binance_btcusdt_(\d{6})$/i);
+      const match = key.match(new RegExp(`^binance_${sym.toLowerCase()}usdt_(\\d{6})$`, 'i'));
       if (match) {
         expiries.add(match[1]);
       }
-    } else if (ex === 'bybit') {  // NEW
-      // Bybit format: bybit_btcusdt-27dec24
-      const match = key.match(/^bybit_btcusdt-(\d{2}[a-z]{3}\d{2})$/i);
+    } else if (ex === 'bybit') {
+      const match = key.match(new RegExp(`^bybit_${sym.toLowerCase()}usdt-(\\d{2}[a-z]{3}\\d{2})$`, 'i'));
       if (match) {
         expiries.add(match[1].toUpperCase());
       }
@@ -136,25 +137,23 @@ getAllFutureExpiries(exchange) {
   
   return Array.from(expiries).sort();
 }
+  getOptionQuote(exchange, expiry, strike, type, symbol = 'BTC'){  // ✅ ADD symbol parameter
+  const ex = exchange.toLowerCase();
+  const sym = symbol.toUpperCase();
   
-  getOptionQuote(exchange, expiry, strike, type){
-    const ex = exchange.toLowerCase();
-    
-    // ✅ Build correct key for each exchange
-    let symbol, key;
-    
-    if (ex === 'bybit') {
-      // ✅ FIX: Bybit keys are stored in lowercase after normalization
-      symbol = `BTC-${expiry.toUpperCase()}-${strike}-${type.toUpperCase()}-USDT`;
-      key = `bybit_${symbol.toLowerCase()}`;
-    } else if (ex === 'binance') {
-      symbol = `BTC-${expiry}-${strike}-${type}`;
-      key = `binance_${symbol}`;
-    } else {
-      // Deribit format
-      symbol = `BTC-${expiry}-${strike}-${type}`;
-      key = `deribit_${symbol}`;
-    }
+  let instrumentSymbol, key;
+  
+  if (ex === 'bybit') {
+    instrumentSymbol = `BTC-${expiry.toUpperCase()}-${strike}-${type.toUpperCase()}-USDT`;
+    key = `bybit_${instrumentSymbol.toLowerCase()}`;
+  } else if (ex === 'binance') {
+    instrumentSymbol = `BTC-${expiry}-${strike}-${type}`;
+    key = `binance_${instrumentSymbol}`;
+  } else {
+    // Deribit format with symbol support
+    instrumentSymbol = `${sym}-${expiry}-${strike}-${type}`;  // ✅ CHANGE THIS
+    key = `deribit_${instrumentSymbol}`;
+  }
     
     const q = this.marketData[key];
     if (!q) {
@@ -188,48 +187,48 @@ getAllFutureExpiries(exchange) {
     };
   }
   calculateJelly(config, strikes) {
-    const { exchange, optionExpiry, futureExpiry } = config;
-    const ex = exchange.toLowerCase();
-    const fut = this.getFuturePrice(ex, futureExpiry);
-    const spotPrice = this.getSpotPrice(ex);
-    const nearestStrike = Math.round(spotPrice / 1000) * 1000;
+  const { exchange, optionExpiry, futureExpiry, symbol = 'BTC' } = config;
+  const ex = exchange.toLowerCase();
+  const fut = this.getFuturePrice(ex, futureExpiry, symbol);  // ✅ PASS symbol
+  const spotPrice = this.getSpotPrice(ex, symbol);  // ✅ PASS symbol
+  const nearestStrike = Math.round(spotPrice / 1000) * 1000;
+  
+  return strikes.map(strike => {
+    const ce = this.getOptionQuote(ex, optionExpiry, strike, 'C', symbol);  // ✅ PASS symbol
+    const pe = this.getOptionQuote(ex, optionExpiry, strike, 'P', symbol);  // ✅ PASS symbol
+    if (!ce || !pe) return null;
     
-    return strikes.map(strike => {
-      const ce = this.getOptionQuote(ex, optionExpiry, strike, 'C');
-      const pe = this.getOptionQuote(ex, optionExpiry, strike, 'P');
-      if (!ce || !pe) return null;
-      
-      const ce_bid = ce.bid;
-      const ce_ask = ce.ask;
-      const pe_bid = pe.bid;
-      const pe_ask = pe.ask;
-      
-      let conversion = null;
-      let reversal = null;
-      
-      if ([ce_bid, pe_ask, fut.ask, ce_ask, pe_bid, fut.bid].every(v => v !== null)) {
-        conversion = (ce_bid + strike) - (pe_ask + fut.ask);
-        reversal = (pe_bid + fut.bid) - (ce_ask + strike);
-      }
-      return {
-        strike,
-        conversion: conversion !== null ? conversion.toFixed(2) : null,
-        reversal: reversal !== null ? reversal.toFixed(2) : null,
-        nearest_strike: nearestStrike,
-        ce_ltp: ce.last?.toFixed(2),
-        pe_ltp: pe.last?.toFixed(2)
-      };
-    }).filter(Boolean);
-  }
+    const ce_bid = ce.bid;
+    const ce_ask = ce.ask;
+    const pe_bid = pe.bid;
+    const pe_ask = pe.ask;
+    
+    let conversion = null;
+    let reversal = null;
+    
+    if ([ce_bid, pe_ask, fut.ask, ce_ask, pe_bid, fut.bid].every(v => v !== null)) {
+      conversion = (ce_bid + strike) - (pe_ask + fut.ask);
+      reversal = (pe_bid + fut.bid) - (ce_ask + strike);
+    }
+    return {
+      strike,
+      conversion: conversion !== null ? conversion.toFixed(2) : null,
+      reversal: reversal !== null ? reversal.toFixed(2) : null,
+      nearest_strike: nearestStrike,
+      ce_ltp: ce.last?.toFixed(2),
+      pe_ltp: pe.last?.toFixed(2)
+    };
+  }).filter(Boolean);
+}
 
   calculateSynthetic(config, strikes) {
-  const { exchange, optionExpiry } = config;
+  const { exchange, optionExpiry, symbol = 'BTC' } = config;
   const ex = exchange.toLowerCase();
   
   // ✅ Try to get future with same expiry
-  let fut = this.getFuturePrice(ex, optionExpiry);
+  let fut = this.getFuturePrice(ex, optionExpiry, symbol);  // ✅ PASS symbol
   
-  const spotPrice = this.getSpotPrice(ex);
+  const spotPrice = this.getSpotPrice(ex, symbol);  // ✅ PASS symbol
   const nearestStrike = Math.round(spotPrice / 1000) * 1000;
   
   // ✅ Check if future exists for this expiry
@@ -243,8 +242,8 @@ getAllFutureExpiries(exchange) {
   }
   
   return strikes.map(strike => {
-    const ce = this.getOptionQuote(ex, optionExpiry, strike, 'C');
-    const pe = this.getOptionQuote(ex, optionExpiry, strike, 'P');
+    const ce = this.getOptionQuote(ex, optionExpiry, strike, 'C', symbol);  // ✅ PASS symbol
+    const pe = this.getOptionQuote(ex, optionExpiry, strike, 'P', symbol);  // ✅ PASS symbol
     if (!ce || !pe) return null;
     
     const ce_bid = ce.bid;
@@ -263,8 +262,6 @@ getAllFutureExpiries(exchange) {
       }
     } else {
       // ✅ NEW: Synthetic without future - use CE/PE prices only
-      // Formula: Synthetic Long = CE_bid - PE_ask
-      //          Synthetic Short = PE_bid - CE_ask
       if ([ce_bid, pe_ask, ce_ask, pe_bid].every(v => v !== null && v > 0)) {
         conversion = ce_bid - pe_ask;
         reversal = pe_bid - ce_ask;
@@ -282,11 +279,16 @@ getAllFutureExpiries(exchange) {
   }).filter(Boolean);
 }
   calculateButterfly(config, strikes) {
-    const { exchange, optionExpiry, gap } = config;
-    const ex = exchange.toLowerCase();
-    const gapNum = parseInt(gap) || 1000;
-    const spotPrice = this.getSpotPrice(ex);
-    const nearestStrike = Math.round(spotPrice / 1000) * 1000;
+  const { exchange, optionExpiry, gap, symbol = 'BTC' } = config;
+  const ex = exchange.toLowerCase();
+  
+  // ✅ FIX: Use symbol-aware gap default
+  const defaultGap = symbol === 'ETH' ? 50 : 1000;
+  const gapNum = parseInt(gap) || defaultGap;
+  
+  const spotPrice = this.getSpotPrice(ex, symbol);
+  const interval = symbol === 'ETH' ? 50 : 1000;
+  const nearestStrike = Math.round(spotPrice / interval) * interval;
     
     const results = [];
     
@@ -326,7 +328,7 @@ getAllFutureExpiries(exchange) {
     return results;
   }
   calculateCashFuture(config) {
-  const { exchange, fut1Expiry, fut2Expiry, noPrtFolio, selectedFutures } = config;
+  const { exchange, fut1Expiry, fut2Expiry, noPrtFolio, selectedFutures , symbol = 'BTC' } = config;
   const ex = exchange.toLowerCase();
   
   const results = [];
@@ -336,8 +338,8 @@ getAllFutureExpiries(exchange) {
     selectedFutures.forEach(item => {
       const [itemExchange, fut1, fut2] = item.split('_');
       
-      const fut1Price = this.getFuturePrice(itemExchange.toLowerCase(), fut1 === 'perpetual' ? null : fut1);
-      const fut2Price = this.getFuturePrice(itemExchange.toLowerCase(), fut2);
+      const fut1Price = this.getFuturePrice(itemExchange.toLowerCase(), fut1 === 'perpetual' ? null : fut1, symbol);
+      const fut2Price = this.getFuturePrice(itemExchange.toLowerCase(), fut2, symbol);
       
       if (fut1Price.bid && fut1Price.ask && fut2Price.bid && fut2Price.ask) {
         const fs = fut2Price.bid - fut1Price.ask;
@@ -364,14 +366,14 @@ getAllFutureExpiries(exchange) {
   if (fut1Expiry === '' || fut1Expiry === 'all') {
     // Include perpetual + all futures
     fut1List.push('perpetual');
-    fut1List.push(...this.getAllFutureExpiries(exchange));
+    fut1List.push(...this.getAllFutureExpiries(exchange, symbol));  
   } else {
     fut1List.push(fut1Expiry);
   }
   
   // Get Fut2 list
   if (fut2Expiry === '' || fut2Expiry === 'all') {
-    fut2List.push(...this.getAllFutureExpiries(exchange));
+     fut2List.push(...this.getAllFutureExpiries(exchange, symbol));
   } else {
     fut2List.push(fut2Expiry);
   }
@@ -379,8 +381,8 @@ getAllFutureExpiries(exchange) {
   // Generate matrix
   fut1List.forEach(f1 => {
     fut2List.forEach(f2 => {
-      const fut1Price = this.getFuturePrice(ex, f1 === 'perpetual' ? null : f1);
-      const fut2Price = this.getFuturePrice(ex, f2);
+      const fut1Price = this.getFuturePrice(ex, f1 === 'perpetual' ? null : f1, symbol);  // ✅ PASS symbol
+      const fut2Price = this.getFuturePrice(ex, f2, symbol);  // ✅ PASS symbol
       
       if (fut1Price.bid && fut1Price.ask && fut2Price.bid && fut2Price.ask) {
         const fs = fut2Price.bid - fut1Price.ask;
@@ -440,20 +442,22 @@ getAllFutureExpiries(exchange) {
   }
   
   calculateStrategy(tableId) {
-    const config = this.activeStrategies.get(tableId);
-    if (!config) {
-      return null;
-    }
+  const config = this.activeStrategies.get(tableId);
+  if (!config) {
+    return null;
+  }
+  
+  const { strategy, strikeInterval, noPrtFolio, symbol } = config;
+  const spotPrice = this.getSpotPrice(config.exchange, symbol);  // ✅ PASS symbol
+  const defaultInterval = symbol === 'ETH' ? 50 : 1000;
+  const interval = strikeInterval || defaultInterval;
+   const nearestStrike = Math.round(spotPrice / interval) * interval;
     
-    const { strategy, strikeInterval, noPrtFolio } = config;
-    const spotPrice = this.getSpotPrice(config.exchange);
-    const nearestStrike = Math.round(spotPrice / (strikeInterval || 1000)) * (strikeInterval || 1000);
-    
-    const strikes = [];
-    const portfolioCount = parseInt(noPrtFolio) || 10;
-    for (let i = -portfolioCount; i <= portfolioCount; i++) {
-      strikes.push(nearestStrike + (i * (strikeInterval || 1000)));
-    }
+      const strikes = [];
+  const portfolioCount = parseInt(noPrtFolio) || 10;
+  for (let i = -portfolioCount; i <= portfolioCount; i++) {
+    strikes.push(nearestStrike + (i * interval));
+  }
     
     const strategyLower = strategy.toLowerCase();
 
@@ -525,115 +529,125 @@ getAllFutureExpiries(exchange) {
   }
 
   calculateRatio(config, strikes) {
-    const { exchange, optionExpiry, gap, ratio1, ratio2 } = config;
-    const ex = exchange.toLowerCase();
-    const gapNum = parseInt(gap) || 1000;
-    const r1 = parseInt(ratio1) || 1;
-    const r2 = parseInt(ratio2) || 2;
-    const spotPrice = this.getSpotPrice(ex);
-    const nearestStrike = Math.round(spotPrice / 1000) * 1000;
-    
-    const input1 = 1.0;
-    const input2 = r2 / r1;
-    
-    const results = [];
-    
-    ['CE', 'PE'].forEach(type => {
-      strikes.forEach(l1 => {
-        const l2 = type === 'CE' ? l1 + gapNum : l1 - gapNum;
-        if (!strikes.includes(l2)) return;
-        
-        const optType = type === 'CE' ? 'C' : 'P';
-        const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType);
-        const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType);
-        
-        if (!q1 || !q2) return;
-        
-        const bid1 = q1.bid, ask1 = q1.ask;
-        const bid2 = q2.bid, ask2 = q2.ask;
-        
-        if ([bid1, ask1, bid2, ask2].some(v => v === null)) return;
-        
-        const buyValue = (bid2 * input2) - (ask1 * input1);
-        const sellValue = (bid1 * input1) - (ask2 * input2);
-        
-        results.push({
-          type,
-          l1,
-          l2,
-          buy_value: buyValue.toFixed(2),
-          sell_value: sellValue.toFixed(2),
-          l1_ltp: (q1.last || q1.mid).toFixed(2),
-          nearest_strike: nearestStrike
-        });
+  const { exchange, optionExpiry, gap, ratio1, ratio2, symbol = 'BTC' } = config;
+  const ex = exchange.toLowerCase();
+  
+  // ✅ FIX: Use symbol-aware gap default
+  const defaultGap = symbol === 'ETH' ? 50 : 1000;
+  const gapNum = parseInt(gap) || defaultGap;
+  
+  const r1 = parseInt(ratio1) || 1;
+  const r2 = parseInt(ratio2) || 2;
+  const spotPrice = this.getSpotPrice(ex, symbol);
+  const interval = symbol === 'ETH' ? 50 : 1000;
+  const nearestStrike = Math.round(spotPrice / interval) * interval;
+  
+  const input1 = 1.0;
+  const input2 = r2 / r1;
+  
+  const results = [];
+  
+  ['CE', 'PE'].forEach(type => {
+    strikes.forEach(l1 => {
+      const l2 = type === 'CE' ? l1 + gapNum : l1 - gapNum;
+      if (!strikes.includes(l2)) return;
+      
+      const optType = type === 'CE' ? 'C' : 'P';
+      const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType, symbol);  // ✅ PASS symbol
+      const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType, symbol);  // ✅ PASS symbol
+      
+      if (!q1 || !q2) return;
+      
+      const bid1 = q1.bid, ask1 = q1.ask;
+      const bid2 = q2.bid, ask2 = q2.ask;
+      
+      if ([bid1, ask1, bid2, ask2].some(v => v === null)) return;
+      
+      const buyValue = (bid2 * input2) - (ask1 * input1);
+      const sellValue = (bid1 * input1) - (ask2 * input2);
+      
+      results.push({
+        type,
+        l1,
+        l2,
+        buy_value: buyValue.toFixed(2),
+        sell_value: sellValue.toFixed(2),
+        l1_ltp: (q1.last || q1.mid).toFixed(2),
+        nearest_strike: nearestStrike
       });
     });
-    
-    return results;
-  }
+  });
+  
+  return results;
+}
 
-  calculatePulseButterfly(config, strikes) {
-    const { exchange, optionExpiry, gap, strategyLegType } = config;
-    const ex = exchange.toLowerCase();
-    const gapNum = parseInt(gap) || 1000;
-    const spotPrice = this.getSpotPrice(ex);
-    const nearestStrike = Math.round(spotPrice / 1000) * 1000;
-    
-    const results = [];
-    
-    ['CE', 'PE'].forEach(type => {
-      strikes.forEach(l2 => {
-        let l1, l3, l4;
-        
-        if (type === 'CE') {
-          l1 = l2 - gapNum;
-          l3 = strategyLegType === '1331' ? l2 + gapNum : l2 + 2 * gapNum;
-          l4 = l3 + gapNum;
-        } else {
-          l1 = l2 + gapNum;
-          l3 = strategyLegType === '1331' ? l2 - gapNum : l2 - 2 * gapNum;
-          l4 = l3 - gapNum;
-        }
-        
-        if (![l1, l3, l4].every(s => strikes.includes(s))) return;
-        
-        const optType = type === 'CE' ? 'C' : 'P';
-        const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType);
-        const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType);
-        const q3 = this.getOptionQuote(ex, optionExpiry, l3, optType);
-        const q4 = this.getOptionQuote(ex, optionExpiry, l4, optType);
-        
-        if (!q1 || !q2 || !q3 || !q4) return;
-        
-        const bid1 = q1.bid, ask1 = q1.ask;
-        const bid2 = q2.bid, ask2 = q2.ask;
-        const bid3 = q3.bid, ask3 = q3.ask;
-        const bid4 = q4.bid, ask4 = q4.ask;
-        
-        if ([bid1, ask1, bid2, ask2, bid3, ask3, bid4, ask4].some(v => v === null)) return;
-        
-        let longValue, shortValue;
-        if (strategyLegType === '1331') {
-          longValue = (bid2 * 3 + bid4) - (ask1 + ask3 * 3);
-          shortValue = (bid1 + bid3 * 3) - (ask2 * 3 + ask4);
-        } else {
-          longValue = (bid2 * 2 + bid4) - (ask1 + ask3 * 2);
-          shortValue = (bid1 + bid3 * 2) - (ask2 * 2 + ask4);
-        }
-        
-        results.push({
-          type,
-          l2,
-          long_value: longValue.toFixed(2),
-          short_value: shortValue.toFixed(2),
-          l2_ltp: (q2.last || q2.mid).toFixed(2),
-          nearest_strike: nearestStrike
-        });
+calculatePulseButterfly(config, strikes) {
+  const { exchange, optionExpiry, gap, strategyLegType, symbol = 'BTC' } = config;
+  const ex = exchange.toLowerCase();
+  
+  // ✅ FIX: Use symbol-aware gap default
+  const defaultGap = symbol === 'ETH' ? 50 : 1000;
+  const gapNum = parseInt(gap) || defaultGap;
+  
+  const spotPrice = this.getSpotPrice(ex, symbol);
+  const interval = symbol === 'ETH' ? 50 : 1000;
+  const nearestStrike = Math.round(spotPrice / interval) * interval;
+  
+  const results = [];
+  
+  ['CE', 'PE'].forEach(type => {
+    strikes.forEach(l2 => {
+      let l1, l3, l4;
+      
+      if (type === 'CE') {
+        l1 = l2 - gapNum;
+        l3 = strategyLegType === '1331' ? l2 + gapNum : l2 + 2 * gapNum;
+        l4 = l3 + gapNum;
+      } else {
+        l1 = l2 + gapNum;
+        l3 = strategyLegType === '1331' ? l2 - gapNum : l2 - 2 * gapNum;
+        l4 = l3 - gapNum;
+      }
+      
+      if (![l1, l3, l4].every(s => strikes.includes(s))) return;
+      
+      const optType = type === 'CE' ? 'C' : 'P';
+      const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType, symbol);  // ✅ PASS symbol
+      const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType, symbol);  // ✅ PASS symbol
+      const q3 = this.getOptionQuote(ex, optionExpiry, l3, optType, symbol);  // ✅ PASS symbol
+      const q4 = this.getOptionQuote(ex, optionExpiry, l4, optType, symbol);  // ✅ PASS symbol
+      
+      if (!q1 || !q2 || !q3 || !q4) return;
+      
+      const bid1 = q1.bid, ask1 = q1.ask;
+      const bid2 = q2.bid, ask2 = q2.ask;
+      const bid3 = q3.bid, ask3 = q3.ask;
+      const bid4 = q4.bid, ask4 = q4.ask;
+      
+      if ([bid1, ask1, bid2, ask2, bid3, ask3, bid4, ask4].some(v => v === null)) return;
+      
+      let longValue, shortValue;
+      if (strategyLegType === '1331') {
+        longValue = (bid2 * 3 + bid4) - (ask1 + ask3 * 3);
+        shortValue = (bid1 + bid3 * 3) - (ask2 * 3 + ask4);
+      } else {
+        longValue = (bid2 * 2 + bid4) - (ask1 + ask3 * 2);
+        shortValue = (bid1 + bid3 * 2) - (ask2 * 2 + ask4);
+      }
+      
+      results.push({
+        type,
+        l2,
+        long_value: longValue.toFixed(2),
+        short_value: shortValue.toFixed(2),
+        l2_ltp: (q2.last || q2.mid).toFixed(2),
+        nearest_strike: nearestStrike
       });
     });
-    
-    return results;
-  }
+  });
+  
+  return results;
+}
 }
 
 module.exports = StrategyCalculator;

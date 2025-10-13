@@ -17,11 +17,7 @@ app.use(cors());
 app.use(express.json());
 
 const marketData = {};
-const metadata = {
-  deribit: { expiries: [], strikes: { min: 0, max: 0 }, instruments: {} },
-  binance: { expiries: [], strikes: { min: 0, max: 0 }, instruments: {} },
-  bybit: { expiries: [], strikes: { min: 0, max: 0 }, instruments: {} }
-};
+const metadata = {};
 const activeConnectors = {};
 const strategyConnectors = {};
 const connectedClients = new Set();
@@ -105,7 +101,6 @@ function stopStrategyUpdates() {
   }
 }
 
-// ==================== Helper Function to Get Connector ====================
 function getConnector(exchange, onData, onMetadata) {
   const ex = exchange.toLowerCase();
   if (ex === 'deribit') {
@@ -181,7 +176,7 @@ app.post('/api/configs/delete', async (req, res) => {
 });
 
 app.post('/api/fetch-metadata', async (req, res) => {
-  const { exchange, instrumentType } = req.body;
+  const { exchange, instrumentType, symbol } = req.body;
   
   try {
     console.log(`Fetching ${instrumentType || 'option'} metadata for ${exchange}...`);
@@ -193,46 +188,54 @@ app.post('/api/fetch-metadata', async (req, res) => {
     };
     
     const onMetadata = (ex, data) => {
+      if (!metadata[ex]) metadata[ex] = {};
       metadata[ex] = data;
     };
     
-    const tempConnector = getConnector(exchange, onData, onMetadata);
-    await tempConnector.connect({ 
+    const baseExchange = exchange.split('_')[0];
+    const tempConnector = getConnector(baseExchange, onData, onMetadata);
+    
+    const connectConfig = { 
       isMetadataFetch: true,
       instrumentType: instrumentType || 'option'
-    });
+    };
+    
+    if (baseExchange.toLowerCase() === 'deribit' && symbol) {
+      connectConfig.symbol = symbol;
+      console.log(`📊 Fetching Deribit metadata for ${symbol}...`);
+    }
+    
+    await tempConnector.connect(connectConfig);
     
     await new Promise(resolve => setTimeout(resolve, 2000));
     
     if (tempConnector) tempConnector.disconnect();
     
-    res.json({ success: true, metadata: metadata[exchange.toLowerCase()] });
+    res.json({ success: true, metadata: metadata[baseExchange.toLowerCase()] });
   } catch (error) {
     console.error('Metadata fetch error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
+
 app.post('/api/start-streaming', async (req, res) => {
   const { exchanges, config } = req.body;
   
   try {
-    for (const exchange of exchanges) {
-      console.log(`Starting ${exchange}`);
+    for (const exchangeId of exchanges) {
+      console.log(`Starting ${exchangeId}`);
       
-      // ✅ Stop existing connector properly
-      if (activeConnectors[exchange]) {
-        console.log(`🛑 Stopping existing ${exchange} connector...`);
-        activeConnectors[exchange].disconnect();
-        delete activeConnectors[exchange];
+      if (activeConnectors[exchangeId]) {
+        console.log(`🛑 Stopping existing ${exchangeId} connector...`);
+        activeConnectors[exchangeId].disconnect();
+        delete activeConnectors[exchangeId];
         
-        // ✅ Wait for cleanup
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       
-      // ✅ Clear old market data for this exchange
       Object.keys(marketData).forEach(key => {
-        if (key.startsWith(`${exchange}_`)) {
+        if (key.startsWith(`${exchangeId}_`)) {
           delete marketData[key];
         }
       });
@@ -244,11 +247,20 @@ app.post('/api/start-streaming', async (req, res) => {
       };
       
       const onMetadata = () => {};
-      const connector = getConnector(exchange, onData, onMetadata);
-      await connector.connect({ ...config[exchange], isMetadataFetch: false });
-      activeConnectors[exchange] = connector;
       
-      console.log(`✅ ${exchange} connector started`);
+      const baseExchange = config[exchangeId].baseExchange || exchangeId.split('_')[0];
+      const connector = getConnector(baseExchange, onData, onMetadata);
+      
+      const connectConfig = { ...config[exchangeId], isMetadataFetch: false };
+      if (baseExchange.toLowerCase() === 'deribit' && config[exchangeId].symbol) {
+        connectConfig.symbol = config[exchangeId].symbol;
+        console.log(`📊 Starting Deribit streaming for ${config[exchangeId].symbol}...`);
+      }
+      
+      await connector.connect(connectConfig);
+      activeConnectors[exchangeId] = connector;
+      
+      console.log(`✅ ${exchangeId} connector started`);
     }
     
     res.json({ success: true });
@@ -280,8 +292,6 @@ app.post('/api/stop-streaming', async (req, res) => {
 
 // ==================== Strategy Endpoints ====================
 
-// In server.js - Update the /api/strategy/add endpoint
-
 app.post('/api/strategy/add', async (req, res) => {
   try {
     const { tableId, config } = req.body;
@@ -289,6 +299,9 @@ app.post('/api/strategy/add', async (req, res) => {
     if (!tableId || !config) {
       return res.status(400).json({ success: false, error: 'tableId and config required' });
     }
+    
+    // ✅ ADD: Log the incoming config to verify symbol
+    console.log(`📊 Adding strategy for ${config.exchange} with symbol: ${config.symbol || 'BTC'}`);
     
     if (strategyConnectors[tableId]) {
       strategyConnectors[tableId].disconnect();
@@ -305,33 +318,31 @@ app.post('/api/strategy/add', async (req, res) => {
       broadcastMarketData(key, data);
     };
     
-    // ✅ NEW: Handle Jelly strategy separately
     if (config.strategy.toLowerCase() === 'jelly') {
       console.log('🎯 Setting up Jelly strategy with dual subscriptions...');
       
-      // Subscribe to OPTIONS
       const optionConnectorConfig = {
         isMetadataFetch: false,
         instrumentType: 'option',
         expiry: config.optionExpiry,
         strikeInterval: config.strikeInterval,
         noPrtFolio: config.noPrtFolio,
-        strategy: config.strategy
+        strategy: config.strategy,
+        symbol: config.symbol || 'BTC'  // ✅ This should pass through correctly
       };
       
       const optionConnector = getConnector(exchange, onData, () => {});
       await optionConnector.connect(optionConnectorConfig);
       strategyConnectors[`${tableId}_option`] = optionConnector;
       
-      // Subscribe to FUTURES
       const futureConnectorConfig = {
         isMetadataFetch: false,
         instrumentType: 'future',
         futureExpiry: config.futureExpiry,
-        strategy: config.strategy
+        strategy: config.strategy,
+        symbol: config.symbol || 'BTC'  // ✅ This should pass through correctly
       };
       
-      // ✅ Wait a bit before second connection
       await new Promise(resolve => setTimeout(resolve, 500));
       
       const futureConnector = getConnector(exchange, onData, () => {});
@@ -339,7 +350,6 @@ app.post('/api/strategy/add', async (req, res) => {
       strategyConnectors[`${tableId}_future`] = futureConnector;
       
     } else {
-      // Original logic for other strategies
       let instrumentType, expiryToSubscribe;
       
       if (config.strategy.toLowerCase() === 'c-f/f') {
@@ -357,7 +367,8 @@ app.post('/api/strategy/add', async (req, res) => {
         strikeInterval: config.strikeInterval,
         noPrtFolio: config.noPrtFolio,
         strategy: config.strategy,
-        futureExpiry: config.futureExpiry
+        futureExpiry: config.futureExpiry,
+        symbol: config.symbol || 'BTC'  // ✅ This should pass through correctly
       };
       
       const connector = getConnector(exchange, onData, () => {});
@@ -379,6 +390,7 @@ app.post('/api/strategy/add', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 app.post('/api/strategy/remove', (req, res) => {
   try {
     const { tableId } = req.body;
@@ -450,7 +462,6 @@ app.post('/api/strategy/cff/add-row', async (req, res) => {
       }
     }
     
-    // Ensure connectors for both futures exist
     const ex = exchange.toLowerCase();
     const connectorKey = `${tableId}_${ex}`;
     
@@ -466,7 +477,8 @@ app.post('/api/strategy/cff/add-row', async (req, res) => {
         isMetadataFetch: false,
         instrumentType: 'future',
         strategy: 'C-F/F',
-        subscribeAllFutures: true
+        subscribeAllFutures: true,
+        symbol: config.symbol || 'BTC'
       });
       strategyConnectors[connectorKey] = newConnector;
       await new Promise(resolve => setTimeout(resolve, 1500));
@@ -550,8 +562,9 @@ app.post('/api/strategy/cff/remove-row', async (req, res) => {
         }));
         console.log(`🔌 Unsubscribed: ${fut1Symbol}, ${fut2Symbol}`);
       } else if (ex === 'deribit') {
-        const fut1Symbol = `BTC-${fut1Expiry}`;
-        const fut2Symbol = `BTC-${fut2Expiry}`;
+        const symbol = config.symbol || 'BTC';
+        const fut1Symbol = `${symbol}-${fut1Expiry}`;
+        const fut2Symbol = `${symbol}-${fut2Expiry}`;
         connector.send({
           jsonrpc: "2.0",
           id: Date.now(),
@@ -612,7 +625,7 @@ const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Config file: ${CONFIG_FILE_PATH}`);
-  console.log(`Supported exchanges: Deribit, Binance, Bybit`);
+  console.log(`Supported exchanges: Deribit (BTC/ETH), Binance (BTC), Bybit (BTC)`);
 });
 
 process.on('SIGTERM', () => {

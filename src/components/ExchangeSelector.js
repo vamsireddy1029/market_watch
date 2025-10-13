@@ -15,6 +15,8 @@ const ExchangeSelector = ({
   onConfigChange,
   availableData,
   onSubmit,
+  marketData = {}, // ✅ Add marketData prop with default
+  onAddInstance, // ✅ Add onAddInstance prop
 }) => {
   const handleStrategyClick = () => {
     const params = new URLSearchParams();
@@ -51,24 +53,102 @@ const ExchangeSelector = ({
     return new Date(2000 + year, months[monthStr], day);
   };
 
-  const renderExchangeConfig = (exchangeId) => {
-    const exchangeConfig = config[exchangeId];
-    const exchangeData = availableData[exchangeId];
+ const renderExchangeConfig = (exchangeId) => {
+  const exchangeConfig = config[exchangeId];
+  const exchangeData = availableData[exchangeId];
 
-    if (!exchangeConfig || !exchangeData) return null;
+  if (!exchangeConfig) return null;
+  if (!exchangeData) {
+    return (
+      <div className="exchange-config-card" key={exchangeId}>
+        <div className="config-header">
+          <h3>{exchangeId.toUpperCase()}</h3>
+        </div>
+        <p style={{padding: '16px', textAlign: 'center', color: '#666'}}>
+          Loading metadata...
+        </p>
+      </div>
+    );
+  }
+
+  const baseExchange = exchangeId.split('_')[0];
+  const symbol = exchangeConfig.symbol || 'BTC';
+    const spotKey = baseExchange === 'deribit' 
+      ? `deribit_${symbol}-PERPETUAL`
+      : baseExchange === 'binance'
+      ? 'binance_btcusdt'
+      : 'bybit_btcusdt';
+
+    const spotData = marketData?.[spotKey];
+    const spotPrice = spotData 
+      ? ((parseFloat(spotData.best_bid_price) + parseFloat(spotData.best_ask_price)) / 2).toFixed(2)
+      : 'N/A';
 
     return (
       <div className="exchange-config-card" key={exchangeId}>
         <div className="config-header">
           <div className="config-title-row">
             <h3>{exchangeId.toUpperCase()}</h3>
-            <span className="expiry-badge">
-              {exchangeData.expiries?.length || 0} expiries
-            </span>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              
+              
+              <span className="expiry-badge">
+                {exchangeData.expiries?.length || 0} expiries
+              </span>
+              
+              {/* ✅ Add "+" button for Deribit to create multiple instances */}
+              {baseExchange === 'deribit' && onAddInstance && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAddInstance(exchangeId);
+                  }}
+                  style={{
+                    background: '#4caf50',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '50%',
+                    width: '24px',
+                    height: '24px',
+                    cursor: 'pointer',
+                    fontSize: '16px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Add another Deribit instance"
+                >
+                  +
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
         <div className="config-grid">
+          {/* Symbol dropdown for Deribit */}
+          {baseExchange === 'deribit' && (
+            <div className="form-group">
+              <label>Symbol</label>
+              <select
+                value={exchangeConfig.symbol || 'BTC'}
+                onChange={(e) => {
+                  const newSymbol = e.target.value;
+                  onConfigChange(exchangeId, "symbol", newSymbol);
+                  
+                  // ✅ Auto-adjust gap based on symbol
+                  const defaultGap = newSymbol === 'ETH' ? 100 : 1000;
+                  if (exchangeConfig.gap === 1000 || exchangeConfig.gap === 100) {
+                    onConfigChange(exchangeId, "gap", defaultGap);
+                  }
+                }}
+              >
+                <option value="BTC">🟠 BTC</option>
+                <option value="ETH">🔷 ETH</option>
+              </select>
+            </div>
+          )}
+
           <div className="form-group">
             <label>Instrument Type</label>
             <select
@@ -164,15 +244,26 @@ const ExchangeSelector = ({
               <div className="form-group">
                 <label>Strike Gap</label>
                 <select
-                  value={exchangeConfig.gap || 500}
+                  value={exchangeConfig.gap || (exchangeConfig.symbol === 'ETH' ? 100 : 1000)}
                   onChange={(e) =>
                     onConfigChange(exchangeId, "gap", parseInt(e.target.value))
                   }
                 >
-                  <option value={500}>500</option>
-                  <option value={1000}>1000</option>
-                  <option value={2000}>2000</option>
-                  <option value={5000}>5000</option>
+                  {exchangeConfig.symbol === 'ETH' ? (
+                    <>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                      <option value={200}>200</option>
+                      <option value={500}>500</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value={500}>500</option>
+                      <option value={1000}>1000</option>
+                      <option value={2000}>2000</option>
+                      <option value={5000}>5000</option>
+                    </>
+                  )}
                 </select>
               </div>
               <button
@@ -192,22 +283,21 @@ const ExchangeSelector = ({
         )}
 
         {exchangeConfig.instrumentType === "future" && (
-  <div className="action-buttons">
-    <button
-      className="submit-btnn"
-      onClick={() => onSubmit(exchangeId)}
-    >
-      Submit
-    </button>
-    <button
-      className="exit-btnn"
-      onClick={() => onExit(exchangeId)}
-    >
-      Exit
-    </button>
-  </div>
-)}
-
+          <div className="action-buttons">
+            <button
+              className="submit-btnn"
+              onClick={() => onSubmit(exchangeId)}
+            >
+              Submit
+            </button>
+            <button
+              className="exit-btnn"
+              onClick={() => onExit(exchangeId)}
+            >
+              Exit
+            </button>
+          </div>
+        )}
       </div>
     );
   };

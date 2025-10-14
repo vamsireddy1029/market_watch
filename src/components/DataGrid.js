@@ -11,21 +11,29 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
   const dataEntries = Object.values(marketData || {});
 
   // Group by exchange instance
-  const grouped = useMemo(() => {
-    const g = {};
-    dataEntries.forEach((row) => {
-      const exchangeKey = row.exchange;
-      if (!g[exchangeKey]) g[exchangeKey] = [];
-      g[exchangeKey].push(row);
-    });
+  // Group by exchange instance
+const grouped = useMemo(() => {
+  const g = {};
+  
+  console.log('📊 DataGrid grouping', Object.keys(marketData).length, 'keys');
+  
+  Object.entries(marketData || {}).forEach(([key, row]) => {
+    const keyParts = key.split('_');
+    let exchangeKey;
     
-    // ✅ FIX: Ensure all selected exchanges have a group, even if empty
-    selectedExchanges?.forEach(ex => {
-      if (!g[ex]) g[ex] = [];
-    });
+    if (keyParts[0] === 'deribit' && keyParts.length >= 2) {
+      exchangeKey = `${keyParts[0]}_${keyParts[1]}`;
+    } else {
+      exchangeKey = keyParts[0];
+    }
     
-    return g;
-  }, [dataEntries, selectedExchanges]);
+    if (!g[exchangeKey]) g[exchangeKey] = [];
+    g[exchangeKey].push(row);
+  });
+  
+  console.log('📊 Grouped exchanges:', Object.keys(g));
+  return g;
+}, [marketData]);
 
   // Determine columns dynamically
     const columnsByExchange = useMemo(() => {
@@ -69,7 +77,8 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
   }, [marketData]);
 
   // Get friendly exchange name
-  const getExchangeDisplayName = (exchangeKey) => {
+  // ✅ CHANGE THIS:
+const getExchangeDisplayName = (exchangeKey) => {
   const parts = exchangeKey.split('_');
   const baseExchange = parts[0];
   
@@ -87,13 +96,13 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
     return `Deribit ${config.symbol}`;
   }
     
-    const names = {
-      'binance': 'Binance',
-      'bybit': 'Bybit'
-    };
-    
-    return names[baseExchange] || baseExchange;
+  const names = {
+    'binance': 'Binance',
+    'bybit': 'Bybit'
   };
+    
+  return names[baseExchange] || baseExchange;
+};
 
   // Spot price detection with symbol support
   const getSpotPrice = (rows, exchangeKey) => {

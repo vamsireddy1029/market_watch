@@ -273,49 +273,46 @@ class BybitConnector {
         channels.push('tickers.BTCUSDT');
       } 
       else if (instrumentType === 'future' || (strategy && strategy.toLowerCase() === 'c-f/f')) {
-        console.log('🎯 Fetching Bybit futures for C-F/F strategy...');
-        const res = await axios.get('https://api.bybit.com/v5/market/instruments-info', { params: { category: 'linear' } });
-        const allSymbols = res.data?.result?.list || [];
+  console.log('🎯 Fetching Bybit futures for C-F/F strategy...');
+  const res = await axios.get('https://api.bybit.com/v5/market/instruments-info', { params: { category: 'linear' } });
+  const allSymbols = res.data?.result?.list || [];
 
-        const perpetual = allSymbols.find(s => s.symbol === 'BTCUSDT' && s.contractType === 'LinearPerpetual');
-        const quarterlyFutures = allSymbols.filter(s => 
-          s.symbol && 
-          s.symbol.startsWith('BTCUSDT-') && 
-          s.symbol !== 'BTCUSDT' &&
-          /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/.test(s.symbol)
-        );
+  const perpetual = allSymbols.find(s => s.symbol === 'BTCUSDT' && s.contractType === 'LinearPerpetual');
+  const quarterlyFutures = allSymbols.filter(s => 
+    s.symbol && 
+    s.symbol.startsWith('BTCUSDT-') && 
+    s.symbol !== 'BTCUSDT' &&
+    /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/.test(s.symbol)
+  );
 
-        console.log(`📊 Found ${quarterlyFutures.length} quarterly futures:`, quarterlyFutures.map(f => f.symbol));
+  console.log(`📊 Found ${quarterlyFutures.length} quarterly futures`);
 
-        const futuresList = [];
-        if (perpetual) {
-          futuresList.push(perpetual.symbol);
-          console.log(`✅ Added perpetual: ${perpetual.symbol}`);
-        }
+  const futuresList = [];
+  
+  // ✅ Always add perpetual for C-F/F
+  if (perpetual) {
+    futuresList.push(perpetual.symbol);
+    console.log(`✅ Added perpetual: ${perpetual.symbol}`);
+  }
 
-        if (futureExpiry && futureExpiry.trim() !== '') {
-          const targetExpiry = futureExpiry.trim().toUpperCase();
-          
-          let matched = quarterlyFutures.find(f => f.symbol.endsWith(`-${targetExpiry}`));
-          
-          if (!matched) {
-            matched = quarterlyFutures.find(f => f.symbol.includes(targetExpiry));
-          }
-          
-          if (matched) {
-            futuresList.push(matched.symbol);
-            console.log(`✅ Added specific future: ${matched.symbol}`);
-          } else {
-            console.log(`⚠️ Future expiry ${targetExpiry} not found. Available:`, quarterlyFutures.map(f => f.symbol));
-          }
-        } else {
-          futuresList.push(...quarterlyFutures.map(f => f.symbol));
-          console.log(`✅ Added ${quarterlyFutures.length} futures (All Expiries mode)`);
-        }
+  // ✅ For C-F/F strategy, subscribe to ALL futures
+  const strategyLower = (strategy || '').toLowerCase();
+  if (strategyLower === 'c-f/f') {
+    futuresList.push(...quarterlyFutures.map(f => f.symbol));
+    console.log(`✅ Added ${quarterlyFutures.length} futures for C-F/F (All mode)`);
+  }
+  // For Jelly/Synthetic, only subscribe to specific expiry
+  else if (futureExpiry && futureExpiry.trim() !== '') {
+    const targetExpiry = futureExpiry.trim().toUpperCase();
+    const matched = quarterlyFutures.find(f => f.symbol.endsWith(`-${targetExpiry}`));
+    if (matched) {
+      futuresList.push(matched.symbol);
+      console.log(`✅ Added specific future: ${matched.symbol}`);
+    }
+  }
 
-        console.log(`✅ Total C-F/F futures to subscribe: ${futuresList.length}`);
-        
-        this.startFuturesPricePolling(futuresList);
+  console.log(`✅ Total futures to subscribe: ${futuresList.length}`);
+  this.startFuturesPricePolling(futuresList);
 
         futuresList.forEach(symbol => {
           channels.push(`tickers.${symbol}`);

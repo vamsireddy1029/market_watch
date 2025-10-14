@@ -8,6 +8,7 @@ class DeribitConnector {
     this.onData = onData;
     this.onMetadata = onMetadata;
     this.subscribedChannels = new Set();
+    this.symbol = 'BTC';
     this.metadataTimer = null;
     this.heartbeatInterval = null;
     this.reconnectAttempts = 0;
@@ -16,13 +17,16 @@ class DeribitConnector {
     this.pendingConfig = null;
   }
 
-  async connect(config) {
-    return new Promise((resolve, reject) => {
-      const wsUrl = 'wss://www.deribit.com/ws/api/v2';
-      this.ws = new WebSocket(wsUrl);
+async connect(config) {
+  this.symbol = (config.symbol || 'BTC').toUpperCase(); // ✅ Add this line
+  console.log(`🔌 Connecting Deribit for ${this.symbol}...`);
+  
+  return new Promise((resolve, reject) => {
+    const wsUrl = 'wss://www.deribit.com/ws/api/v2';
+    this.ws = new WebSocket(wsUrl);
 
-      this.ws.on('open', () => {
-        this.isConnected = true;
+    this.ws.on('open', () => {
+      this.isConnected = true;
         this.reconnectAttempts = 0;
         console.log('✅ Deribit connected');
 
@@ -162,50 +166,35 @@ class DeribitConnector {
   }
 
   async subscribeToSpotFirst(config) {
-    console.log('📊 Step 1: Subscribing to BTC-PERPETUAL for spot price...');
-    
-    this.pendingConfig = config;
-    this.spotPriceReceived = false;
-
-    const base = config.symbol?.toUpperCase() || 'BTC';  // ✅ KEEP THIS
-    console.log(`📊 Step 1: Subscribing to ${base}-PERPETUAL for spot price...`);
+  const base = (config.symbol || 'BTC').toUpperCase();
+  console.log(`📊 Step 1: Subscribing to ${base}-PERPETUAL for spot price...`);
   
   this.pendingConfig = config;
   this.spotPriceReceived = false;
 
   const spotSymbol = `${base}-PERPETUAL`;
     
-    this.send({
-      jsonrpc: "2.0",
-      id: 100,
-      method: "public/subscribe",
-      params: { channels: [`ticker.${spotSymbol}.100ms`] }
-    });
-    
-    if (config.futureExpiry) {
-      const futureSymbol = `${base}-${config.futureExpiry}`;
-      console.log(`📊 Also subscribing to future: ${futureSymbol}`);
-      this.send({
-        jsonrpc: "2.0",
-        id: 101,
-        method: "public/subscribe",
-        params: { channels: [`ticker.${futureSymbol}.100ms`] }
-      });
-    }
-    
-    const startTime = Date.now();
-    while (!this.spotPriceReceived && (Date.now() - startTime) < 3000) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    
-    if (this.spotPriceReceived) {
-      console.log('✅ Spot price received, now subscribing to options...');
-      await this.subscribeToInstruments(config);
-    } else {
-      console.log('⚠️ Timeout waiting for spot price, subscribing anyway...');
-      await this.subscribeToInstruments(config);
-    }
+  this.send({
+    jsonrpc: "2.0",
+    id: 100,
+    method: "public/subscribe",
+    params: { channels: [`ticker.${spotSymbol}.100ms`] }
+  });
+  
+  // ✅ Wait for spot price
+  const startTime = Date.now();
+  while (!this.spotPriceReceived && (Date.now() - startTime) < 3000) {
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
+  
+  if (this.spotPriceReceived) {
+    console.log(`✅ ${base} spot price received, subscribing to instruments...`);
+  } else {
+    console.log(`⚠️ Timeout waiting for ${base} spot price, subscribing anyway...`);
+  }
+  
+  await this.subscribeToInstruments(config);
+}
 
   async subscribeToInstruments(config) {
     const channels = [];
@@ -309,37 +298,49 @@ class DeribitConnector {
   }
 
   handleMessage(message) {
-    if (message.method === "subscription" && message.params?.data) {
-      const data = message.params.data;
-      const instrument = data.instrument_name;
+  if (message.method === "subscription" && message.params?.data) {
+    const data = message.params.data;
+    const instrument = data.instrument_name;
 
-      if (instrument === 'BTC-PERPETUAL' && !this.spotPriceReceived) {
-        this.spotPriceReceived = true;
-        console.log(`✅ Spot price received: ${data.last_price}`);
-      }
-
-      const parts = instrument.split("-");
-      const isOption = parts.length === 4;
-      const priceFactor = isOption ? (data.underlying_price || 1) : 1;
-
-      const converted = {
-        exchange: "deribit",
-        instrument,
-        last_price: (data.last_price * priceFactor).toFixed(2),
-        best_bid_price: (data.best_bid_price * priceFactor).toFixed(2),
-        best_ask_price: (data.best_ask_price * priceFactor).toFixed(2),
-        mark_price: (data.mark_price * priceFactor).toFixed(2),
-        min_price: (data.min_price * priceFactor).toFixed(2),
-        max_price: (data.max_price * priceFactor).toFixed(2),
-        volume: data.stats?.volume || 0,
-        open_interest: data.open_interest || 0,
-      };
-
-      this.onData(`deribit_${instrument}`, converted);
-    } else if (message.method === "heartbeat") {
-      this.send({ jsonrpc: "2.0", id: 999, method: "public/test" });
+    const expectedPerp = `${this.symbol}-PERPETUAL`;
+    if (instrument === expectedPerp && !this.spotPriceReceived) {
+      this.spotPriceReceived = true;
+      console.log(`✅ ${instrument} spot price received: ${data.last_price}`);
     }
+
+    if (!instrument.startsWith(`${this.symbol}-`)) {
+      return;
+    }
+
+    const parts = instrument.split("-");
+    const isOption = parts.length === 4;
+    const priceFactor = isOption ? (data.underlying_price || 1) : 1;
+
+    const converted = {
+      exchange: "deribit",
+      instrument,
+      type: instrument.includes('PERPETUAL') ? 'perpetual' : (isOption ? 'option' : 'future'),
+      last_price: (data.last_price * priceFactor).toFixed(2),
+      best_bid_price: (data.best_bid_price * priceFactor).toFixed(2),
+      best_ask_price: (data.best_ask_price * priceFactor).toFixed(2),
+      mark_price: (data.mark_price * priceFactor).toFixed(2),
+      min_price: (data.min_price * priceFactor).toFixed(2),
+      max_price: (data.max_price * priceFactor).toFixed(2),
+      volume: data.stats?.volume || 0,
+      open_interest: data.open_interest || 0,
+      underlying_price: data.underlying_price || null,
+      timestamp: data.timestamp || Date.now()
+    };
+
+    // ✅ Create key: deribit_btc_BTC-PERPETUAL
+    const keyPrefix = `deribit_${this.symbol.toLowerCase()}`;
+    const fullKey = `${keyPrefix}_${instrument}`;
+    
+    console.log('🔑 DeribitConnector creating key:', fullKey); // ✅ ADD THIS LOG
+    
+    this.onData(fullKey, converted);
   }
+}
 
   send(data) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {

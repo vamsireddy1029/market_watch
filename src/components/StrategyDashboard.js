@@ -1224,30 +1224,67 @@ useEffect(() => {
         await fetchDeribitInstruments('option');
       }
     } else if (modalForm.exchange === 'binance') {
+      // ... similar pattern
+    }
+  };
+  
+  fetchMetadata();
+}, [modalForm.exchange, modalForm.strategy, showModal]);
+
+// ✅ WITH THIS:
+useEffect(() => {
+  if (!modalForm.exchange || !showModal || !modalForm.strategy) return;
+  
+  const fetchMetadata = async () => {
+    const isCFF = modalForm.strategy === 'C-F/F';
+    const isJelly = modalForm.strategy === 'Jelly';
+    const isSynthetic = modalForm.strategy === 'Synthetic';
+    
+    // ✅ For Deribit, symbol matters
+    if (modalForm.exchange === 'deribit') {
+      // Jelly & Synthetic need both options and futures
+      if (isJelly || isSynthetic) {
+        await fetchDeribitInstruments('option');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await fetchDeribitInstruments('future');
+      } 
+      // C-F/F only needs futures
+      else if (isCFF) {
+        await fetchDeribitInstruments('future');
+      } 
+      // Other strategies (Butterfly, Ratio, etc.) only need options
+      else {
+        await fetchDeribitInstruments('option');
+      }
+    } 
+    // ✅ For Binance
+    else if (modalForm.exchange === 'binance') {
       if (isJelly || isSynthetic) {
         await fetchBinanceInstruments('option');
         await new Promise(resolve => setTimeout(resolve, 500));
         await fetchBinanceInstruments('future');
       } else if (isCFF) {
         await fetchBinanceInstruments('future');
-      } else if (modalForm.strategy) {
+      } else {
         await fetchBinanceInstruments('option');
       }
-    } else if (modalForm.exchange === 'bybit') {
+    } 
+    // ✅ For Bybit
+    else if (modalForm.exchange === 'bybit') {
       if (isJelly || isSynthetic) {
         await fetchBybitInstruments('option');
         await new Promise(resolve => setTimeout(resolve, 500));
         await fetchBybitInstruments('future');
       } else if (isCFF) {
         await fetchBybitInstruments('future');
-      } else if (modalForm.strategy) {
+      } else {
         await fetchBybitInstruments('option');
       }
     }
   };
   
   fetchMetadata();
-}, [modalForm.exchange, modalForm.strategy, showModal]);
+}, [modalForm.exchange, modalForm.strategy, modalForm.symbol, showModal]);
 
   const addTable = () => {
     const newTable = {

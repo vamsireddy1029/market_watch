@@ -71,13 +71,13 @@ const ExchangeSelector = ({
     );
   }
 
-  const baseExchange = exchangeId.split('_')[0];
-  const symbol = exchangeConfig.symbol || 'BTC';
-    const spotKey = baseExchange === 'deribit' 
-      ? `deribit_${symbol}-PERPETUAL`
-      : baseExchange === 'binance'
-      ? 'binance_btcusdt'
-      : 'bybit_btcusdt';
+const baseExchange = exchangeId.split('_')[0];
+const symbol = (exchangeConfig.symbol || 'BTC').toUpperCase();
+const spotKey = baseExchange === 'deribit' 
+  ? `${exchangeId}_${symbol}-PERPETUAL`  // ✅ Use full exchangeId: deribit_btc_BTC-PERPETUAL
+  : baseExchange === 'binance'
+  ? 'binance_btcusdt'
+  : 'bybit_btcusdt';
 
     const spotData = marketData?.[spotKey];
     const spotPrice = spotData 
@@ -85,45 +85,48 @@ const ExchangeSelector = ({
       : 'N/A';
 
     return (
-      <div className="exchange-config-card" key={exchangeId}>
-        <div className="config-header">
-          <div className="config-title-row">
-            <h3>{exchangeId.toUpperCase()}</h3>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              
-              
-              <span className="expiry-badge">
-                {exchangeData.expiries?.length || 0} expiries
-              </span>
-              
-              {/* ✅ Add "+" button for Deribit to create multiple instances */}
-              {baseExchange === 'deribit' && onAddInstance && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onAddInstance(exchangeId);
-                  }}
-                  style={{
-                    background: '#4caf50',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '50%',
-                    width: '24px',
-                    height: '24px',
-                    cursor: 'pointer',
-                    fontSize: '16px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                  title="Add another Deribit instance"
-                >
-                  +
-                </button>
-              )}
-            </div>
-          </div>
+  <div className="exchange-config-card" key={exchangeId}>
+    <div className="config-header">
+      <div className="config-title-row">
+        {/* ✅ Show proper title */}
+        <h3>
+          {baseExchange.toUpperCase()}
+          {baseExchange === 'deribit' && symbol && ` (${symbol})`}
+        </h3>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <span className="expiry-badge">
+            {exchangeData.expiries?.length || 0} expiries
+          </span>
+          
+          {/* ✅ Only show + button for deribit */}
+          {baseExchange === 'deribit' && onAddInstance && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onAddInstance(exchangeId);
+              }}
+              style={{
+                background: '#4caf50',
+                color: 'white',
+                border: 'none',
+                borderRadius: '50%',
+                width: '24px',
+                height: '24px',
+                cursor: 'pointer',
+                fontSize: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 'bold'
+              }}
+              title="Add another Deribit instance"
+            >
+              +
+            </button>
+          )}
         </div>
+      </div>
+    </div>
 
         <div className="config-grid">
           {/* Symbol dropdown for Deribit */}
@@ -342,8 +345,16 @@ const ExchangeSelector = ({
 
       {selectedExchanges.length > 0 && (
         <div className="config-row">
-          {selectedExchanges.map((exchange) => renderExchangeConfig(exchange))}
-        </div>
+    {selectedExchanges.map((exchange) => {
+      const cfg = config[exchange];
+      const data = availableData[exchange];
+      
+      // ✅ Only render if we have metadata loaded
+      if (!cfg) return null;
+      
+      return renderExchangeConfig(exchange);
+    })}
+  </div>
       )}
     </div>
   );

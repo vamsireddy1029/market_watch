@@ -27,7 +27,7 @@ getSpotPrice(exchange) {
   } else if (ex === 'deribit') {
     perpetualKey = 'deribit_BTC-PERPETUAL';  // ✅ Simple format
   } else if (ex === 'bybit') {
-    perpetualKey = 'bybit_BTCUSDT';
+    perpetualKey = 'bybit_BTCUSDT'; 
   } else {
     console.log(`❌ Unknown exchange: ${ex}`);
     return 0;

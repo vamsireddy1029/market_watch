@@ -518,50 +518,57 @@ class BybitConnector {
   }
 
   startFuturesPricePolling(futuresList) {
-    if (!Array.isArray(futuresList) || futuresList.length === 0) {
-      console.warn('No futures to poll for prices.');
-      return;
-    }
-
-    console.log('📊 Starting Bybit futures price polling via REST API...');
-    const pollPrices = async () => {
-      try {
-        for (const symbol of futuresList) {
-          try {
-            const url = 'https://api.bybit.com/v5/market/tickers';
-            const res = await axios.get(url, { params: { category: 'linear', symbol } });
-            const data = res.data?.result?.list?.[0];
-            if (data) {
-              const converted = {
-                exchange: 'bybit',
-                type: 'future',
-                instrument: symbol,
-                last_price: parseFloat(data.lastPrice || 0).toFixed(2),
-                best_bid_price: parseFloat(data.bid1Price || 0).toFixed(2),
-                best_ask_price: parseFloat(data.ask1Price || 0).toFixed(2),
-                mark_price: parseFloat(data.markPrice || data.lastPrice || 0).toFixed(2),
-                min_price: parseFloat(data.lowPrice24h || 0).toFixed(2),
-                max_price: parseFloat(data.highPrice24h || 0).toFixed(2),
-                volume: parseFloat(data.volume24h || 0).toFixed(2)
-              };
-              
-              const normalizedKey = `bybit_${symbol.toLowerCase()}`;
-              this.updateWithCaching(normalizedKey, converted);
-            }
-          } catch (innerErr) {
-            console.error('❌ Bybit futures price polling error for symbol', symbol, innerErr?.message || innerErr);
-          }
-        }
-      } catch (error) {
-        console.error('❌ Bybit futures price polling error:', error?.message || error);
-      }
-    };
-
-    pollPrices();
-    if (this.pricePollingInterval) clearInterval(this.pricePollingInterval);
-    this.pricePollingInterval = setInterval(pollPrices, 500);
-    console.log('✅ Bybit futures price polling started (500ms interval)');
+  if (!Array.isArray(futuresList) || futuresList.length === 0) {
+    console.warn('No futures to poll for prices.');
+    return;
   }
+
+  console.log('📊 Starting Bybit futures price polling via REST API...');
+  const pollPrices = async () => {
+    try {
+      for (const symbol of futuresList) {
+        try {
+          const url = 'https://api.bybit.com/v5/market/tickers';
+          const res = await axios.get(url, { params: { category: 'linear', symbol } });
+          const data = res.data?.result?.list?.[0];
+          if (data) {
+            const converted = {
+              exchange: 'bybit',
+              type: 'future',
+              instrument: symbol,
+              last_price: parseFloat(data.lastPrice || 0).toFixed(2),
+              best_bid_price: parseFloat(data.bid1Price || 0).toFixed(2),
+              best_ask_price: parseFloat(data.ask1Price || 0).toFixed(2),
+              mark_price: parseFloat(data.markPrice || data.lastPrice || 0).toFixed(2),
+              min_price: parseFloat(data.lowPrice24h || 0).toFixed(2),
+              max_price: parseFloat(data.highPrice24h || 0).toFixed(2),
+              volume: parseFloat(data.volume24h || 0).toFixed(2)
+            };
+            
+            // ✅ FIX: Keep uppercase for consistency
+            const normalizedKey = `bybit_${symbol}`;
+            
+            console.log(`🔑 Bybit future key: ${normalizedKey}`, {
+              bid: data.bid1Price,
+              ask: data.ask1Price
+            });
+            
+            this.updateWithCaching(normalizedKey, converted);
+          }
+        } catch (innerErr) {
+          console.error('❌ Bybit futures price polling error for symbol', symbol, innerErr?.message || innerErr);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Bybit futures price polling error:', error?.message || error);
+    }
+  };
+
+  pollPrices();
+  if (this.pricePollingInterval) clearInterval(this.pricePollingInterval);
+  this.pricePollingInterval = setInterval(pollPrices, 500);
+  console.log('✅ Bybit futures price polling started (500ms interval)');
+}
 
   connectFuturesForJelly(futureExpiry) {
     console.log('🎯 Connecting Bybit futures for Jelly/Synthetic...');
@@ -599,99 +606,104 @@ class BybitConnector {
   }
 
   handleMessage(message, forcedType) {
-    try {
-      if (!message || message.op === 'pong' || message.success === true) return;
+  try {
+    if (!message || message.op === 'pong' || message.success === true) return;
 
-      const topic = message.topic || message.arg?.channel || null;
-      const data = message.data || (Array.isArray(message.result) ? message.result[0] : message.result) || null;
+    const topic = message.topic || message.arg?.channel || null;
+    const data = message.data || (Array.isArray(message.result) ? message.result[0] : message.result) || null;
 
-      if (!data && !message.result) return;
+    if (!data && !message.result) return;
 
-      let symbol = data?.symbol || data?.s || message.arg?.symbol || null;
-      if (!symbol && typeof topic === 'string') {
-        const parts = topic.split('.');
-        symbol = parts.length > 1 ? parts.slice(1).join('.') : null;
-      }
-      if (!symbol && message.result && Array.isArray(message.result.list) && message.result.list[0]) {
-        symbol = message.result.list[0].symbol;
-      }
-      if (!symbol) return;
-
-      const upperSymbol = symbol.toUpperCase();
-      
-     // ✅ Normalize Bybit option symbol: Remove -USDT suffix FIRST
-let normalizedSymbol = upperSymbol;
-if (normalizedSymbol.endsWith('-USDT')) {
-  normalizedSymbol = normalizedSymbol.slice(0, -5); // Remove -USDT
-}
-      
-      const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2,4}-\d{3,6}-[CP]$/i.test(normalizedSymbol);
-      const isFuture = /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/i.test(upperSymbol);
-      const isSpotOrderbook = topic && topic.startsWith('orderbook.');
-      let instrumentType;
-      if (forcedType) {
-        instrumentType = forcedType;
-      } else if (isSpotOrderbook) {
-        instrumentType = 'spot';
-      } else if (isOption) {
-        instrumentType = 'option';
-      } else if (isFuture) {
-        instrumentType = 'future';
-      } else {
-        instrumentType = upperSymbol === 'BTCUSDT' ? 'future' : 'spot';
-      }
-
-      const payload = Array.isArray(data) ? (data[0] || {}) : (data || {});
-
-      let bestBid, bestAsk, lastPrice;
-
-      if (isSpotOrderbook) {
-        bestBid = (payload.b && Array.isArray(payload.b) && payload.b[0]) 
-          ? parseFloat(payload.b[0][0]) 
-          : 0;
-        bestAsk = (payload.a && Array.isArray(payload.a) && payload.a[0]) 
-          ? parseFloat(payload.a[0][0]) 
-          : 0;
-        lastPrice = bestBid > 0 && bestAsk > 0 ? (bestBid + bestAsk) / 2 : 0;
-      } else if (instrumentType === 'option') {
-        bestBid = parseFloat(payload.bidPrice ?? payload.best_bid_price ?? 0);
-        bestAsk = parseFloat(payload.askPrice ?? payload.best_ask_price ?? 0);
-        lastPrice = parseFloat(payload.lastPrice ?? payload.last ?? 0);
-      } else if (instrumentType === 'future') {
-        bestBid = parseFloat(payload.bid1Price ?? payload.best_bid_price ?? 0);
-        bestAsk = parseFloat(payload.ask1Price ?? payload.best_ask_price ?? 0);
-        lastPrice = parseFloat(payload.lastPrice ?? payload.last ?? 0);
-      } else {
-        bestBid = parseFloat(payload.bidPrice ?? payload.best_bid_price ?? 0);
-        bestAsk = parseFloat(payload.askPrice ?? payload.best_ask_price ?? 0);
-        lastPrice = parseFloat(payload.lastPrice ?? payload.last ?? 0);
-      }
-
-      const markPrice = parseFloat(payload.markPrice ?? lastPrice);
-      const lowPrice = parseFloat(payload.lowPrice24h ?? payload.min_price ?? 0);
-      const highPrice = parseFloat(payload.highPrice24h ?? payload.max_price ?? 0);
-      const volume = parseFloat(payload.volume24h ?? payload.volume ?? 0);
-
-      const converted = {
-        exchange: 'bybit',
-        type: instrumentType,
-        instrument: symbol,
-        last_price: Number.isFinite(lastPrice) ? lastPrice.toFixed(2) : '0.00',
-        best_bid_price: Number.isFinite(bestBid) ? bestBid.toFixed(2) : '0.00',
-        best_ask_price: Number.isFinite(bestAsk) ? bestAsk.toFixed(2) : '0.00',
-        mark_price: Number.isFinite(markPrice) ? markPrice.toFixed(2) : '0.00',
-        min_price: Number.isFinite(lowPrice) ? lowPrice.toFixed(2) : '0.00',
-        max_price: Number.isFinite(highPrice) ? highPrice.toFixed(2) : '0.00',
-        volume: Number.isFinite(volume) ? volume.toFixed(2) : '0.00'
-      };
-
-      const normalizedKey = `bybit_${normalizedSymbol.toLowerCase()}`;
-      this.updateWithCaching(normalizedKey, converted);
-
-    } catch (err) {
-      console.error('Error in handleMessage:', err?.message || err);
+    let symbol = data?.symbol || data?.s || message.arg?.symbol || null;
+    if (!symbol && typeof topic === 'string') {
+      const parts = topic.split('.');
+      symbol = parts.length > 1 ? parts.slice(1).join('.') : null;
     }
+    if (!symbol && message.result && Array.isArray(message.result.list) && message.result.list[0]) {
+      symbol = message.result.list[0].symbol;
+    }
+    if (!symbol) return;
+
+    const upperSymbol = symbol.toUpperCase();
+    
+    // ✅ FIX: Remove -USDT suffix for options
+    let cleanSymbol = upperSymbol;
+    if (cleanSymbol.endsWith('-USDT')) {
+      cleanSymbol = cleanSymbol.slice(0, -5);
+    }
+    
+    const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2,4}-\d{3,6}-[CP]$/i.test(cleanSymbol);
+    const isFuture = /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/i.test(upperSymbol);
+    const isSpotOrderbook = topic && topic.startsWith('orderbook.');
+    
+    let instrumentType;
+    if (forcedType) {
+      instrumentType = forcedType;
+    } else if (isSpotOrderbook) {
+      instrumentType = 'spot';
+    } else if (isOption) {
+      instrumentType = 'option';
+    } else if (isFuture) {
+      instrumentType = 'future';
+    } else {
+      instrumentType = upperSymbol === 'BTCUSDT' ? 'future' : 'spot';
+    }
+
+    const payload = Array.isArray(data) ? (data[0] || {}) : (data || {});
+
+    let bestBid, bestAsk, lastPrice;
+
+    if (isSpotOrderbook) {
+      bestBid = (payload.b && Array.isArray(payload.b) && payload.b[0]) 
+        ? parseFloat(payload.b[0][0]) 
+        : 0;
+      bestAsk = (payload.a && Array.isArray(payload.a) && payload.a[0]) 
+        ? parseFloat(payload.a[0][0]) 
+        : 0;
+      lastPrice = bestBid > 0 && bestAsk > 0 ? (bestBid + bestAsk) / 2 : 0;
+    } else if (instrumentType === 'option') {
+      bestBid = parseFloat(payload.bidPrice ?? payload.best_bid_price ?? 0);
+      bestAsk = parseFloat(payload.askPrice ?? payload.best_ask_price ?? 0);
+      lastPrice = parseFloat(payload.lastPrice ?? payload.last ?? 0);
+    } else if (instrumentType === 'future') {
+      bestBid = parseFloat(payload.bid1Price ?? payload.best_bid_price ?? 0);
+      bestAsk = parseFloat(payload.ask1Price ?? payload.best_ask_price ?? 0);
+      lastPrice = parseFloat(payload.lastPrice ?? payload.last ?? 0);
+    } else {
+      bestBid = parseFloat(payload.bidPrice ?? payload.best_bid_price ?? 0);
+      bestAsk = parseFloat(payload.askPrice ?? payload.best_ask_price ?? 0);
+      lastPrice = parseFloat(payload.lastPrice ?? payload.last ?? 0);
+    }
+
+    const markPrice = parseFloat(payload.markPrice ?? lastPrice);
+    const lowPrice = parseFloat(payload.lowPrice24h ?? payload.min_price ?? 0);
+    const highPrice = parseFloat(payload.highPrice24h ?? payload.max_price ?? 0);
+    const volume = parseFloat(payload.volume24h ?? payload.volume ?? 0);
+
+    const converted = {
+      exchange: 'bybit',
+      type: instrumentType,
+      instrument: cleanSymbol,  // ✅ Use cleaned symbol
+      last_price: Number.isFinite(lastPrice) ? lastPrice.toFixed(2) : '0.00',
+      best_bid_price: Number.isFinite(bestBid) ? bestBid.toFixed(2) : '0.00',
+      best_ask_price: Number.isFinite(bestAsk) ? bestAsk.toFixed(2) : '0.00',
+      mark_price: Number.isFinite(markPrice) ? markPrice.toFixed(2) : '0.00',
+      min_price: Number.isFinite(lowPrice) ? lowPrice.toFixed(2) : '0.00',
+      max_price: Number.isFinite(highPrice) ? highPrice.toFixed(2) : '0.00',
+      volume: Number.isFinite(volume) ? volume.toFixed(2) : '0.00'
+    };
+
+    // ✅ FIX: Use uppercase for key consistency
+    const normalizedKey = `bybit_${cleanSymbol}`;
+    
+    console.log(`🔑 Bybit creating key: ${normalizedKey}`);
+    
+    this.updateWithCaching(normalizedKey, converted);
+
+  } catch (err) {
+    console.error('Error in handleMessage:', err?.message || err);
   }
+}
 
   unsubscribeFromInstrument(instrument) {
     if (!instrument) return;

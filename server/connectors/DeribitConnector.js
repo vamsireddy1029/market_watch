@@ -301,7 +301,8 @@ async connect(config) {
   if (message.method === "subscription" && message.params?.data) {
     const data = message.params.data;
     const instrument = data.instrument_name;
-
+    
+    // Skip if not for our symbol
     const expectedPerp = `${this.symbol}-PERPETUAL`;
     if (instrument === expectedPerp && !this.spotPriceReceived) {
       this.spotPriceReceived = true;
@@ -332,13 +333,8 @@ async connect(config) {
       timestamp: data.timestamp || Date.now()
     };
 
-    // ✅ Create key: deribit_btc_BTC-PERPETUAL
-    const keyPrefix = `deribit_${this.symbol.toLowerCase()}`;
-    const fullKey = `${keyPrefix}_${instrument}`;
-    
-    console.log('🔑 DeribitConnector creating key:', fullKey); // ✅ ADD THIS LOG
-    
-    this.onData(fullKey, converted);
+    // ✅ Let server.js handle key formatting
+    this.onData(instrument, converted);  // Just pass the raw instrument name
   }
 }
 

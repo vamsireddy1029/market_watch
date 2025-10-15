@@ -1716,14 +1716,16 @@ const applyStrategy = async () => {
             <div style={{ padding: '20px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '20px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Exchange</label>
-                  <select value={modalForm.exchange} onChange={(e) => setModalForm({...modalForm, exchange: e.target.value})} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}>
-                    <option value="">--Select--</option>
-                    {(limitExchanges && limitExchanges.length > 0 ? limitExchanges : ['binance','deribit','bybit']).map(ex => (
-                      <option key={ex} value={ex}>{ex.charAt(0).toUpperCase() + ex.slice(1)}</option>
-                    ))}
-                  </select>
-                </div>
+  <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Exchange</label>
+  <select value={modalForm.exchange} onChange={(e) => setModalForm({...modalForm, exchange: e.target.value})} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}>
+    <option value="">--Select--</option>
+    <option value="binance">Binance</option>
+    <option value="deribit">Deribit</option>
+    <option value="bybit">Bybit</option>
+    <option value="lighter">no</option>
+    <option value="okx">OKX</option>
+  </select>
+</div>
 
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                   <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Strategy</label>
@@ -1917,30 +1919,34 @@ const applyStrategy = async () => {
         Add C-F/F Row
       </h3>
       
-      <div style={{ marginBottom: '15px' }}>
-        <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px', display: 'block' }}>Exchange</label>
-        <select 
-          value={cffDialogData.exchange} 
-          onChange={(e) => {
-            const selectedEx = e.target.value;
-            setCffDialogData({...cffDialogData, exchange: selectedEx, fut1Expiry: '', fut2Expiry: ''});
-            
-            if (selectedEx === 'deribit' && (!availableData.deribit.futureExpiries || availableData.deribit.futureExpiries.length === 0)) {
-              fetchDeribitInstruments('future');
-            } else if (selectedEx === 'binance' && (!availableData.binance.futureExpiries || availableData.binance.futureExpiries.length === 0)) {
-              fetchBinanceInstruments('future');
-            }
-            else if (selectedEx === 'bybit' && (!availableData.bybit.futureExpiries || availableData.bybit.futureExpiries.length === 0)) {
-              fetchBybitInstruments('future');
-            }
-          }}
-          style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
-        >
-          {(limitExchanges && limitExchanges.length > 0 ? limitExchanges : ['deribit', 'binance', 'bybit']).map(ex => (
-  <option key={ex} value={ex}>{ex.charAt(0).toUpperCase() + ex.slice(1)}</option>
-))}
-        </select>
-      </div>
+      
+<div style={{ marginBottom: '15px' }}>
+  <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px', display: 'block' }}>Exchange</label>
+  <select 
+    value={cffDialogData.exchange} 
+    onChange={(e) => {
+      const selectedEx = e.target.value;
+      setCffDialogData({...cffDialogData, exchange: selectedEx, fut1Expiry: '', fut2Expiry: ''});
+      
+      if (selectedEx === 'deribit' && (!availableData.deribit.futureExpiries || availableData.deribit.futureExpiries.length === 0)) {
+        fetchDeribitInstruments('future');
+      } else if (selectedEx === 'binance' && (!availableData.binance.futureExpiries || availableData.binance.futureExpiries.length === 0)) {
+        fetchBinanceInstruments('future');
+      }
+      else if (selectedEx === 'bybit' && (!availableData.bybit.futureExpiries || availableData.bybit.futureExpiries.length === 0)) {
+        fetchBybitInstruments('future');
+      }
+    }}
+    style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+  >
+    <option value="">--Select--</option>
+    <option value="binance">Binance</option>
+    <option value="deribit">Deribit</option>
+    <option value="bybit">Bybit</option>
+    <option value="lighter">Lighter</option>
+    <option value="okx">OKX</option>
+  </select>
+</div>
       
       <div style={{ marginBottom: '15px' }}>
         <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px', display: 'block' }}>Fut1 Expiry</label>

@@ -619,11 +619,11 @@ class BybitConnector {
 
       const upperSymbol = symbol.toUpperCase();
       
-      // ✅ Normalize Bybit option symbol: Remove -USDT suffix for storage
-      let normalizedSymbol = symbol;
-      if (upperSymbol.endsWith('-USDT')) {
-        normalizedSymbol = symbol.slice(0, -5); // Remove '-USDT'
-      }
+     // ✅ Normalize Bybit option symbol: Remove -USDT suffix FIRST
+let normalizedSymbol = upperSymbol;
+if (normalizedSymbol.endsWith('-USDT')) {
+  normalizedSymbol = normalizedSymbol.slice(0, -5); // Remove -USDT
+}
       
       const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2,4}-\d{3,6}-[CP]$/i.test(normalizedSymbol);
       const isFuture = /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/i.test(upperSymbol);
@@ -685,7 +685,7 @@ class BybitConnector {
         volume: Number.isFinite(volume) ? volume.toFixed(2) : '0.00'
       };
 
-      const normalizedKey = `bybit_${symbol.toLowerCase()}`;
+      const normalizedKey = `bybit_${normalizedSymbol.toLowerCase()}`;
       this.updateWithCaching(normalizedKey, converted);
 
     } catch (err) {

@@ -21,14 +21,13 @@ class StrategyCalculator {
 getSpotPrice(exchange) {
   const ex = exchange.toLowerCase();
   
-  // ✅ Support all three exchanges
   let perpetualKey;
   if (ex === 'binance') {
-    perpetualKey = 'binance_btcusdt';
+    perpetualKey = 'binance_BTCUSDT';
   } else if (ex === 'deribit') {
-    perpetualKey = 'deribit_BTC-PERPETUAL';
+    perpetualKey = 'deribit_BTC-PERPETUAL';  // ✅ Simple format
   } else if (ex === 'bybit') {
-    perpetualKey = 'bybit_btcusdt';  // NEW
+    perpetualKey = 'bybit_BTCUSDT';
   } else {
     console.log(`❌ Unknown exchange: ${ex}`);
     return 0;
@@ -53,7 +52,6 @@ getSpotPrice(exchange) {
   console.log(`❌ getSpotPrice: ${perpetualKey} not found or invalid`);
   return 0;
 }
-
 getFuturePrice(exchange, futureExpiry) {
   const ex = exchange.toLowerCase();
 
@@ -61,11 +59,11 @@ getFuturePrice(exchange, futureExpiry) {
   if (!futureExpiry) {
     let perpetualKey;
     if (ex === 'binance') {
-      perpetualKey = 'binance_btcusdt';
+      perpetualKey = 'binance_BTCUSDT';
     } else if (ex === 'deribit') {
-      perpetualKey = 'deribit_BTC-PERPETUAL';
+      perpetualKey = 'deribit_BTC-PERPETUAL';  // ✅ Simple format
     } else if (ex === 'bybit') {
-      perpetualKey = 'bybit_btcusdt';  // NEW
+      perpetualKey = 'bybit_BTCUSDT';
     } else {
       return { bid: 0, ask: 0, mid: 0 };
     }
@@ -81,14 +79,14 @@ getFuturePrice(exchange, futureExpiry) {
     return { bid: 0, ask: 0, mid: 0 };
   }
   
-  // ✅ Build correct key for each exchange
+  // ✅ Build simple key for each exchange
   let key;
   if (ex === 'binance') {
-    key = `binance_btcusdt_${futureExpiry}`.toLowerCase();
+    key = `binance_BTCUSDT_${futureExpiry}`;
   } else if (ex === 'deribit') {
-    key = `deribit_BTC-${futureExpiry}`;
+    key = `deribit_BTC-${futureExpiry}`;  // ✅ Simple format
   } else if (ex === 'bybit') {
-    key = `bybit_btcusdt-${futureExpiry}`.toLowerCase();  // NEW
+    key = `bybit_BTCUSDT-${futureExpiry}`;
   } else {
     return { bid: 0, ask: 0, mid: 0 };
   }
@@ -116,18 +114,20 @@ getAllFutureExpiries(exchange) {
     if (!val || !key.startsWith(`${ex}_`)) continue;
     
     if (ex === 'deribit') {
-      const match = key.match(/^deribit_BTC-(\d{1,2}[A-Z]{3}\d{2})$/i);
+      // Match: deribit_BTC-27MAR26
+      const match = key.match(/^deribit_BTC-(\d{1,2}[A-Z]{3}\d{2})$/);
       if (match && !key.includes('PERPETUAL')) {
-        expiries.add(match[1].toUpperCase());
+        expiries.add(match[1]);
       }
     } else if (ex === 'binance') {
-      const match = key.match(/^binance_btcusdt_(\d{6})$/i);
+      // Match: binance_BTCUSDT_241227
+      const match = key.match(/^binance_BTCUSDT_(\d{6})$/);
       if (match) {
         expiries.add(match[1]);
       }
-    } else if (ex === 'bybit') {  // NEW
-      // Bybit format: bybit_btcusdt-27dec24
-      const match = key.match(/^bybit_btcusdt-(\d{2}[a-z]{3}\d{2})$/i);
+    } else if (ex === 'bybit') {
+      // Match: bybit_BTCUSDT-27DEC24
+      const match = key.match(/^bybit_BTCUSDT-(\d{2}[A-Z]{3}\d{2})$/i);
       if (match) {
         expiries.add(match[1].toUpperCase());
       }
@@ -137,56 +137,49 @@ getAllFutureExpiries(exchange) {
   return Array.from(expiries).sort();
 }
   
-  getOptionQuote(exchange, expiry, strike, type){
-    const ex = exchange.toLowerCase();
-    
-    // ✅ Build correct key for each exchange
-    let symbol, key;
-    
-    if (ex === 'bybit') {
-      // ✅ FIX: Bybit keys are stored in lowercase after normalization
-      symbol = `BTC-${expiry.toUpperCase()}-${strike}-${type.toUpperCase()}-USDT`;
-      key = `bybit_${symbol.toLowerCase()}`;
-    } else if (ex === 'binance') {
-      symbol = `BTC-${expiry}-${strike}-${type}`;
-      key = `binance_${symbol}`;
-    } else {
-      // Deribit format
-      symbol = `BTC-${expiry}-${strike}-${type}`;
-      key = `deribit_${symbol}`;
-    }
-    
-    const q = this.marketData[key];
-    if (!q) {
-      console.log(`❌ Option quote not found: ${key}`);
-      
-      // ✅ Debug: Show available keys for this exchange
-      const availableKeys = Object.keys(this.marketData)
-        .filter(k => k.startsWith(`${ex}_BTC-${expiry}`))
-        .slice(0, 5);
-      if (availableKeys.length > 0) {
-        console.log(`📊 Available keys for ${ex}_BTC-${expiry}:`,  availableKeys.slice(0, 10));
-      }
-      return null;
-    }
-    
-    const bid = parseFloat(q.best_bid_price);
-    const ask = parseFloat(q.best_ask_price);
-    const mark = parseFloat(q.mark_price);
-    const last = parseFloat(q.last_price);
-    
-    const mid = Number.isFinite(bid) && Number.isFinite(ask) 
-      ? (bid + ask) / 2 
-      : (Number.isFinite(mark) ? mark : last);
-    
-    return {
-      bid: Number.isFinite(bid) ? bid : null,
-      ask: Number.isFinite(ask) ? ask : null,
-      mark: Number.isFinite(mark) ? mark : null,
-      mid: Number.isFinite(mid) ? mid : null,
-      last: Number.isFinite(last) ? last : null
-    };
+  getOptionQuote(exchange, expiry, strike, type) {
+  const ex = exchange.toLowerCase();
+  let key;
+  
+  if (ex === 'bybit') {
+    key = `bybit_BTC-${expiry}-${strike}-${type}`;
+  } else if (ex === 'binance') {
+    key = `binance_BTCUSDT-${expiry}-${strike}-${type}`;
+  } else if (ex === 'deribit') {
+    key = `deribit_BTC-${expiry}-${strike}-${type}`;  // ✅ Simple format
   }
+  
+  const q = this.marketData[key];
+  if (!q) {
+    console.log(`❌ Option quote not found: ${key}`);
+    
+    // Debug: Show available keys
+    const availableKeys = Object.keys(this.marketData)
+      .filter(k => k.startsWith(`${ex}_BTC-${expiry}`))
+      .slice(0, 5);
+    if (availableKeys.length > 0) {
+      console.log(`📊 Available keys for ${ex}_BTC-${expiry}:`, availableKeys);
+    }
+    return null;
+  }
+  
+  const bid = parseFloat(q.best_bid_price);
+  const ask = parseFloat(q.best_ask_price);
+  const mark = parseFloat(q.mark_price);
+  const last = parseFloat(q.last_price);
+  
+  const mid = Number.isFinite(bid) && Number.isFinite(ask) 
+    ? (bid + ask) / 2 
+    : (Number.isFinite(mark) ? mark : last);
+  
+  return {
+    bid: Number.isFinite(bid) ? bid : null,
+    ask: Number.isFinite(ask) ? ask : null,
+    mark: Number.isFinite(mark) ? mark : null,
+    mid: Number.isFinite(mid) ? mid : null,
+    last: Number.isFinite(last) ? last : null
+  };
+}
   calculateJelly(config, strikes) {
     const { exchange, optionExpiry, futureExpiry } = config;
     const ex = exchange.toLowerCase();

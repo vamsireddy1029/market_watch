@@ -1,370 +1,437 @@
 const WebSocket = require('ws');
-const axios = require('axios');
 
 class DeribitConnector {
   constructor(onData, onMetadata) {
     this.ws = null;
-    this.isConnected = false;
     this.onData = onData;
     this.onMetadata = onMetadata;
-    this.subscribedChannels = new Set();
+    this.spotPrice = 0;
     this.symbol = 'BTC';
-    this.metadataTimer = null;
-    this.heartbeatInterval = null;
-    this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
-    this.spotPriceReceived = false;
-    this.pendingConfig = null;
+    this.pendingRequests = new Map();
+    this.requestId = 1;
   }
 
-async connect(config) {
-  this.symbol = (config.symbol || 'BTC').toUpperCase(); // ✅ Add this line
-  console.log(`🔌 Connecting Deribit for ${this.symbol}...`);
-  
-  return new Promise((resolve, reject) => {
-    const wsUrl = 'wss://www.deribit.com/ws/api/v2';
-    this.ws = new WebSocket(wsUrl);
+  async connect(config = {}) {
+    const {
+      isMetadataFetch = false,
+      instrumentType = 'all',
+      expiry = null,
+      strikeInterval = 1000,
+      noPrtFolio = 10,
+      strategy = '',
+      symbol = 'BTC',
+      subscribeAllFutures = false,
+      futureExpiry = null,
+      fut1Expiry = null,
+      fut2Expiry = null
+    } = config;
 
-    this.ws.on('open', () => {
-      this.isConnected = true;
-        this.reconnectAttempts = 0;
-        console.log('✅ Deribit connected');
-
-        this.authenticate();
-        this.startHeartbeat();
-
-        setTimeout(() => {
-          if (config.isMetadataFetch) {
-            this.fetchMetadata(config);
-            resolve();
-          } else {
-            this.subscribeToSpotFirst(config).then(resolve);
-          }
-        }, 500);
+    this.symbol = symbol.toUpperCase();
+    this.config = config;
+    
+    console.log(`🔌 Connecting Deribit for ${this.symbol}...`);
+    console.log(`📋 Config:`, JSON.stringify(config, null, 2));
+    
+    return new Promise((resolve, reject) => {
+      this.ws = new WebSocket('wss://www.deribit.com/ws/api/v2');
+      
+      this.ws.on('open', async () => {
+        console.log(`✅ Deribit ${this.symbol} connected`);
+        
+        try {
+          // Step 1: Subscribe to perpetual for spot price
+          console.log(`📊 Step 1: Subscribing to ${this.symbol}-PERPETUAL for spot price...`);
+          this.send({
+            jsonrpc: '2.0',
+            id: 9929,
+            method: 'public/subscribe',
+            params: {
+              channels: [`ticker.${this.symbol}-PERPETUAL.100ms`]
+            }
+          });
+          
+          // Wait for perpetual data
+          await this.waitForSpotPrice();
+          console.log(`✅ ${this.symbol} spot price received: ${this.spotPrice}`);
+          console.log(`✅ ${this.symbol} spot price received, subscribing to instruments...`);
+          
+          // Step 2: Fetch and subscribe to instruments
+          await this.subscribeToInstruments({
+            isMetadataFetch,
+            instrumentType,
+            expiry,
+            strikeInterval,
+            noPrtFolio,
+            strategy,
+            subscribeAllFutures,
+            futureExpiry,
+            fut1Expiry,
+            fut2Expiry
+          });
+          
+          resolve();
+        } catch (error) {
+          console.error(`❌ Deribit ${this.symbol} connection error:`, error);
+          reject(error);
+        }
       });
-
+      
       this.ws.on('message', (data) => {
         try {
           const message = JSON.parse(data);
           this.handleMessage(message);
         } catch (error) {
-          console.error('Deribit parse error:', error);
+          console.error('❌ Message parse error:', error);
         }
       });
-
+      
       this.ws.on('error', (error) => {
-        console.error('Deribit error:', error.message);
+        console.error(`❌ Deribit ${this.symbol} WebSocket error:`, error);
+        reject(error);
       });
-
+      
       this.ws.on('close', () => {
-        this.isConnected = false;
-        this.cleanup();
-        console.log('Deribit disconnected');
-
-        if (this.reconnectAttempts < this.maxReconnectAttempts && !config.isMetadataFetch) {
-          this.reconnectAttempts++;
-          console.log(`Reconnecting... attempt ${this.reconnectAttempts}`);
-          setTimeout(() => this.connect(config), 3000);
-        }
+        console.log(`Deribit ${this.symbol} disconnected`);
       });
     });
   }
-
-  authenticate() {
-    this.send({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "public/hello",
-      params: { client_name: "trading-dashboard", client_version: "1.0" }
-    });
-  }
-
-  startHeartbeat() {
-    this.heartbeatInterval = setInterval(() => {
-      if (this.isConnected) {
-        this.send({ jsonrpc: "2.0", id: 999, method: "public/test" });
-      }
-    }, 30000);
-  }
-
-  async fetchMetadata(config) {
-  console.log('📊 Fetching Deribit metadata...', config);
-
-  try {
-    const symbol = config.symbol?.toUpperCase() || 'BTC';  // ✅ ADD THIS
-    const currencies = [symbol];  // ✅ CHANGE THIS from ['BTC', 'ETH']
-    const expiriesSet = new Set();
-    const futureExpiriesSet = new Set();
-    const optionExpiriesSet = new Set();
-    const strikesArr = [];
-    const instrumentsObj = { options: [], futures: [], perpetual: [] };
-
-    const { instrumentType = 'all' } = config;
-
-    for (const currency of currencies) {
-      console.log(`📡 Fetching instruments for ${currency}...`);
-
-        // ✅ Futures
-        const futuresRes = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
-          params: { currency, kind: 'future', expired: false }
-        });
-        const futures = futuresRes.data.result || [];
-
-        futures.forEach(fut => {
-          instrumentsObj.futures.push(fut.instrument_name);
-          if (fut.settlement_period !== 'perpetual') {
-            const parts = fut.instrument_name.split('-');
-            if (parts.length >= 2) {
-              const expiry = parts[1];
-              expiriesSet.add(expiry);
-              futureExpiriesSet.add(expiry);
-            }
-          } else {
-            instrumentsObj.perpetual.push(fut.instrument_name);
-          }
-        });
-
-        // ✅ Options
-        if (instrumentType === 'option' || instrumentType === 'all') {
-          const optionsRes = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
-            params: { currency, kind: 'option', expired: false }
-          });
-          const options = optionsRes.data.result || [];
-
-          options.forEach(opt => {
-            const date = new Date(opt.expiration_timestamp);
-            const day = date.getDate();
-            const month = date.toLocaleString('en-US', { month: 'short' }).toUpperCase();
-            const year = String(date.getFullYear()).slice(2);
-            const dateStr = `${day}${month}${year}`;
-            expiriesSet.add(dateStr);
-            optionExpiriesSet.add(dateStr);
-            strikesArr.push(opt.strike);
-            instrumentsObj.options.push(opt.instrument_name);
-          });
-
-          console.log(`✅ ${currency} options: ${options.length}`);
-        }
-      }
-
-      const metadata = {
-        expiries: Array.from(expiriesSet).sort(),
-        futureExpiries: Array.from(futureExpiriesSet).sort(),
-        optionExpiries: Array.from(optionExpiriesSet).sort(),
-        strikes: strikesArr.length > 0 ? { min: Math.min(...strikesArr), max: Math.max(...strikesArr) } : { min: 0, max: 0 },
-        instruments: instrumentsObj
-      };
-
-      this.onMetadata('deribit', metadata);
-      console.log(`✅ Metadata fetched for BTC + ETH`);
-      return metadata;
-
-    } catch (error) {
-      console.error('Deribit metadata fetch failed:', error.message);
-      throw error;
-    }
-  }
-
-  async subscribeToSpotFirst(config) {
-  const base = (config.symbol || 'BTC').toUpperCase();
-  console.log(`📊 Step 1: Subscribing to ${base}-PERPETUAL for spot price...`);
-  
-  this.pendingConfig = config;
-  this.spotPriceReceived = false;
-
-  const spotSymbol = `${base}-PERPETUAL`;
-    
-  this.send({
-    jsonrpc: "2.0",
-    id: 100,
-    method: "public/subscribe",
-    params: { channels: [`ticker.${spotSymbol}.100ms`] }
-  });
-  
-  // ✅ Wait for spot price
-  const startTime = Date.now();
-  while (!this.spotPriceReceived && (Date.now() - startTime) < 3000) {
-    await new Promise(resolve => setTimeout(resolve, 100));
-  }
-  
-  if (this.spotPriceReceived) {
-    console.log(`✅ ${base} spot price received, subscribing to instruments...`);
-  } else {
-    console.log(`⚠️ Timeout waiting for ${base} spot price, subscribing anyway...`);
-  }
-  
-  await this.subscribeToInstruments(config);
-}
 
   async subscribeToInstruments(config) {
-    const channels = [];
-     const { instrumentType, expiry, startStrike, gap, entryCount, symbol = 'BTC' } = config;
-     const base = symbol.toUpperCase();
-
-    console.log(`🔔 Subscribing for ${base} instruments with config:`, JSON.stringify(config, null, 2));
-
-     try {
-      if (instrumentType === 'future') {
-        const res = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
-          params: { currency: base, kind: 'future', expired: false }
-        });
-        const futures = res.data?.result || [];
-        futures.forEach(f => channels.push(`ticker.${f.instrument_name}.100ms`));
-        console.log(`📈 Added ${futures.length} ${base} futures`);
-      } 
-      else if (instrumentType === 'option') {
-        const res = await axios.get('https://www.deribit.com/api/v2/public/get_instruments', {
-          params: { currency: base, kind: 'option', expired: false }
-        });
-        let instruments = res.data?.result || [];
-        console.log(`🎯 Total ${base} options fetched: ${instruments.length}`);
-
-        if (expiry && expiry.trim() !== '') {
-          let expiryNorm = expiry.trim();
-          if (/^0\d[A-Z]{3}\d{2}$/.test(expiryNorm)) {
-            expiryNorm = expiryNorm.replace(/^0/, "");
-          }
-          instruments = instruments.filter(i => i.instrument_name.includes(`-${expiryNorm}-`));
-          console.log(`🎯 After expiry filter (${expiryNorm}): ${instruments.length}`);
+    const {
+      isMetadataFetch,
+      instrumentType,
+      expiry,
+      strikeInterval,
+      noPrtFolio,
+      strategy,
+      subscribeAllFutures = false,
+      futureExpiry,
+      fut1Expiry,
+      fut2Expiry
+    } = config;
+    
+    console.log(`🔔 Subscribing for ${this.symbol} instruments with config:`, JSON.stringify(config, null, 2));
+    
+    try {
+      // ✅ Fetch instruments from Deribit
+      const response = await this.request({
+        jsonrpc: '2.0',
+        id: 7617,
+        method: 'public/get_instruments',
+        params: {
+          currency: this.symbol,
+          kind: instrumentType === 'future' ? 'future' : (instrumentType === 'option' ? 'option' : undefined),
+          expired: false
         }
-
-        const start = parseInt(startStrike);
-        const gapNum = parseInt(gap);
-        const count = parseInt(entryCount);
-
-        if (!isNaN(start) && !isNaN(gapNum) && !isNaN(count) && gapNum > 0 && count > 0) {
-          const allowedStrikes = new Set();
-          for (let i = 0; i < count; i++) {
-            allowedStrikes.add(start + i * gapNum);
+      });
+      
+      if (!response || !response.result) {
+        console.error(`❌ No instruments response for ${this.symbol}`);
+        return;
+      }
+      
+      let instruments = response.result;
+      console.log(`📊 Total ${this.symbol} ${instrumentType} instruments fetched: ${instruments.length}`);
+      
+      // ✅ METADATA FETCH MODE - Store all and return
+      if (isMetadataFetch) {
+        this.storeMetadata(instruments, instrumentType);
+        return;
+      }
+      
+      // ✅ FUTURE INSTRUMENT HANDLING
+      if (instrumentType === 'future') {
+        // Filter out perpetual from the list
+        instruments = instruments.filter(i => !i.instrument_name.includes('PERPETUAL'));
+        console.log(`📊 ${this.symbol} non-perpetual futures: ${instruments.length}`);
+        
+        // ✅ CASE 1: C-F/F Strategy with ALL EXPIRIES mode
+        if (subscribeAllFutures || 
+            (strategy && strategy.toLowerCase() === 'c-f/f' && 
+             (!fut1Expiry || fut1Expiry === 'all' || !fut2Expiry || fut2Expiry === 'all'))) {
+          
+          console.log(`🌐 C-F/F ALL MODE: Subscribing to ALL ${this.symbol} futures (no filtering)`);
+          
+          const futureInstruments = instruments.filter(i => i.instrument_name.startsWith(this.symbol));
+          console.log(`🎯 Found ${futureInstruments.length} total futures for ${this.symbol}`);
+          
+          const channels = futureInstruments.map(inst => `ticker.${inst.instrument_name}.100ms`);
+          
+          if (channels.length > 0) {
+            await this.subscribeInBatches(channels);
+            console.log(`✅ Subscribed to ${channels.length} ${this.symbol} future channels`);
+          } else {
+            console.warn(`⚠️ No future channels found for ${this.symbol}`);
           }
-
+          
+          return;
+        }
+        
+        // ✅ CASE 2: C-F/F with specific expiries
+        if (strategy && strategy.toLowerCase() === 'c-f/f') {
+          const expiriesToSubscribe = new Set();
+          
+          if (fut1Expiry && fut1Expiry !== 'all' && fut1Expiry !== 'perpetual') {
+            expiriesToSubscribe.add(fut1Expiry);
+          }
+          if (fut2Expiry && fut2Expiry !== 'all') {
+            expiriesToSubscribe.add(fut2Expiry);
+          }
+          
+          if (expiriesToSubscribe.size > 0) {
+            console.log(`🎯 C-F/F SPECIFIC MODE: Subscribing to expiries:`, Array.from(expiriesToSubscribe));
+            instruments = instruments.filter(i => {
+              return Array.from(expiriesToSubscribe).some(exp => i.instrument_name.includes(exp));
+            });
+            console.log(`🎯 After expiry filter: ${instruments.length} futures`);
+          }
+        }
+        
+        // ✅ CASE 3: Jelly/Synthetic with specific future expiry
+        else if (expiry || futureExpiry) {
+          const targetExpiry = expiry || futureExpiry;
+          console.log(`🎯 Filtering for specific expiry: ${targetExpiry}`);
+          instruments = instruments.filter(i => i.instrument_name.includes(targetExpiry));
+          console.log(`🎯 After expiry filter (${targetExpiry}): ${instruments.length} futures`);
+        }
+        
+        // Subscribe to filtered futures
+        const channels = instruments.map(inst => `ticker.${inst.instrument_name}.100ms`);
+        
+        if (channels.length > 0) {
+          console.log(`📊 Subscribing to ${channels.length} ${this.symbol} future channels`);
+          await this.subscribeInBatches(channels);
+          console.log(`✅ Subscribed to ${channels.length} ${this.symbol} future channels`);
+        } else {
+          console.warn(`⚠️ No future channels to subscribe for ${this.symbol}`);
+        }
+        
+        return;
+      }
+      
+      // ✅ OPTION INSTRUMENT HANDLING
+      if (instrumentType === 'option') {
+        // Filter by expiry if specified
+        if (expiry) {
+          instruments = instruments.filter(i => i.instrument_name.includes(expiry));
+          console.log(`🎯 After expiry filter (${expiry}): ${instruments.length} ${this.symbol} options`);
+        }
+        
+        // Filter by strike range based on spot price
+        if (this.spotPrice > 0) {
+          const interval = parseInt(strikeInterval) || (this.symbol === 'ETH' ? 50 : 1000);
+          const nearestStrike = Math.round(this.spotPrice / interval) * interval;
+          const portfolioCount = parseInt(noPrtFolio) || 10;
+          const minStrike = nearestStrike - (portfolioCount * interval);
+          const maxStrike = nearestStrike + (portfolioCount * interval);
+          
+          console.log(`🎯 Strike range for ${this.symbol}: ${minStrike} - ${maxStrike} (nearest: ${nearestStrike}, interval: ${interval})`);
+          
           instruments = instruments.filter(i => {
-            const parts = i.instrument_name.split('-');
-            if (parts.length >= 3) {
-              const strike = parseInt(parts[2]);
-              return allowedStrikes.has(strike);
+            const match = i.instrument_name.match(/-(\d+)-[CP]$/);
+            if (match) {
+              const strike = parseInt(match[1]);
+              return strike >= minStrike && strike <= maxStrike;
             }
             return false;
           });
-          console.log(`🎯 After strike filter: ${instruments.length}`);
+          
+          console.log(`🎯 After strike filter: ${instruments.length} ${this.symbol} options`);
         }
-
-        instruments.forEach(i => {
-          channels.push(`ticker.${i.instrument_name}.100ms`);
-        });
-        console.log(`🎯 Final ${base} options subscribed: ${instruments.length}`);
+        
+        // Subscribe to filtered options
+        const channels = instruments.map(inst => `ticker.${inst.instrument_name}.100ms`);
+        
+        if (channels.length > 0) {
+          console.log(`📊 Subscribing to ${channels.length} ${this.symbol} option channels`);
+          await this.subscribeInBatches(channels);
+          console.log(`✅ Subscribed to ${channels.length} ${this.symbol} option channels`);
+        } else {
+          console.warn(`⚠️ No option channels to subscribe for ${this.symbol}`);
+        }
       }
-
-      if (channels.length > 0) {
-        console.log(`📊 Total ${base} channels to subscribe: ${channels.length}`);
-        this.batchSubscribe(channels);
-      } else {
-        console.log(`⚠️ No ${base} channels to subscribe!`);
-      }
-
+      
     } catch (error) {
-      console.error('❌ Subscribe failed:', error.message);
+      console.error(`❌ Subscribe error for ${this.symbol}:`, error);
     }
   }
 
-  batchSubscribe(channels) {
-    const CHUNK = 50;
-    for (let i = 0; i < channels.length; i += CHUNK) {
-      const slice = channels.slice(i, i + CHUNK);
-      this.send({
-        jsonrpc: "2.0",
-        id: 200 + i,
-        method: "public/subscribe",
-        params: { channels: slice }
-      });
-      slice.forEach(ch => this.subscribedChannels.add(ch));
+  storeMetadata(instruments, instrumentType) {
+    const expiries = new Set();
+    const futureExpiries = new Set();
+    const optionExpiries = new Set();
+    const strikes = { min: Infinity, max: -Infinity };
+    
+    instruments.forEach(inst => {
+      const name = inst.instrument_name;
+      
+      // Extract expiry
+      const expiryMatch = name.match(/-(\d{1,2}[A-Z]{3}\d{2})/);
+      if (expiryMatch && !name.includes('PERPETUAL')) {
+        const expiry = expiryMatch[1];
+        expiries.add(expiry);
+        
+        if (instrumentType === 'future' || name.includes('-') && !name.match(/-[CP]$/)) {
+          futureExpiries.add(expiry);
+        }
+        
+        if (name.match(/-[CP]$/)) {
+          optionExpiries.add(expiry);
+        }
+      }
+      
+      // Extract strike for options
+      const strikeMatch = name.match(/-(\d+)-[CP]$/);
+      if (strikeMatch) {
+        const strike = parseInt(strikeMatch[1]);
+        strikes.min = Math.min(strikes.min, strike);
+        strikes.max = Math.max(strikes.max, strike);
+      }
+    });
+    
+    const metadata = {
+      expiries: Array.from(expiries).sort(),
+      futureExpiries: Array.from(futureExpiries).sort(),
+      optionExpiries: Array.from(optionExpiries).sort(),
+      strikes: strikes.min !== Infinity ? strikes : { min: 0, max: 0 },
+      instruments: {
+        options: instruments.filter(i => i.instrument_name.match(/-[CP]$/)).length,
+        futures: instruments.filter(i => !i.instrument_name.includes('PERPETUAL') && !i.instrument_name.match(/-[CP]$/)).length,
+        perpetual: instruments.filter(i => i.instrument_name.includes('PERPETUAL')).length
+      }
+    };
+    
+    console.log(`✅ ${this.symbol} metadata:`, {
+      optionExpiries: metadata.optionExpiries.length,
+      futureExpiries: metadata.futureExpiries.length,
+      options: metadata.instruments.options,
+      futures: metadata.instruments.futures
+    });
+    
+    if (this.onMetadata) {
+      this.onMetadata('deribit', metadata);
     }
-    console.log(`✅ Subscribed to ${this.subscribedChannels.size} channels`);
   }
 
-  unsubscribeFromInstrument(instrument) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const channel = `ticker.${instrument}.raw`;
-      this.ws.send(JSON.stringify({
-        method: 'public/unsubscribe',
-        params: {
-          channels: [channel]
-        },
+  async subscribeInBatches(channels, batchSize = 50) {
+    for (let i = 0; i < channels.length; i += batchSize) {
+      const batch = channels.slice(i, i + batchSize);
+      
+      await this.request({
         jsonrpc: '2.0',
-        id: Date.now()
-      }));
-      console.log(`Unsubscribed from ${channel}`);
+        id: this.requestId++,
+        method: 'public/subscribe',
+        params: { channels: batch }
+      });
+      
+      // Small delay between batches
+      if (i + batchSize < channels.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
+  }
+
+  waitForSpotPrice() {
+    return new Promise((resolve) => {
+      const checkInterval = setInterval(() => {
+        if (this.spotPrice > 0) {
+          clearInterval(checkInterval);
+          resolve();
+        }
+      }, 100);
+      
+      // Timeout after 10 seconds
+      setTimeout(() => {
+        clearInterval(checkInterval);
+        if (this.spotPrice === 0) {
+          console.warn(`⚠️ ${this.symbol} spot price timeout, using default`);
+          this.spotPrice = this.symbol === 'ETH' ? 3800 : 100000;
+        }
+        resolve();
+      }, 10000);
+    });
   }
 
   handleMessage(message) {
-  if (message.method === "subscription" && message.params?.data) {
-    const data = message.params.data;
-    const instrument = data.instrument_name;
-    
-    // Skip if not for our symbol
-    const expectedPerp = `${this.symbol}-PERPETUAL`;
-    if (instrument === expectedPerp && !this.spotPriceReceived) {
-      this.spotPriceReceived = true;
-      console.log(`✅ ${instrument} spot price received: ${data.last_price}`);
-    }
-
-    if (!instrument.startsWith(`${this.symbol}-`)) {
+    // Handle JSON-RPC responses
+    if (message.id && this.pendingRequests.has(message.id)) {
+      const { resolve } = this.pendingRequests.get(message.id);
+      resolve(message);
+      this.pendingRequests.delete(message.id);
       return;
     }
-
-    const parts = instrument.split("-");
-    const isOption = parts.length === 4;
-    const priceFactor = isOption ? (data.underlying_price || 1) : 1;
-
-    const converted = {
-      exchange: "deribit",
-      instrument,
-      type: instrument.includes('PERPETUAL') ? 'perpetual' : (isOption ? 'option' : 'future'),
-      last_price: (data.last_price * priceFactor).toFixed(2),
-      best_bid_price: (data.best_bid_price * priceFactor).toFixed(2),
-      best_ask_price: (data.best_ask_price * priceFactor).toFixed(2),
-      mark_price: (data.mark_price * priceFactor).toFixed(2),
-      min_price: (data.min_price * priceFactor).toFixed(2),
-      max_price: (data.max_price * priceFactor).toFixed(2),
-      volume: data.stats?.volume || 0,
-      open_interest: data.open_interest || 0,
-      underlying_price: data.underlying_price || null,
-      timestamp: data.timestamp || Date.now()
-    };
-
-    // ✅ Let server.js handle key formatting
-    this.onData(instrument, converted);  // Just pass the raw instrument name
+    
+    // Handle subscription updates
+    if (message.params && message.params.channel && message.params.data) {
+      const channel = message.params.channel;
+      const data = message.params.data;
+      
+      // Extract instrument name from channel
+      const instrumentMatch = channel.match(/ticker\.([^.]+)\./);
+      if (!instrumentMatch) return;
+      
+      const instrument = instrumentMatch[1];
+      
+      // Update spot price from perpetual
+      if (instrument.includes('PERPETUAL')) {
+        const mid = (parseFloat(data.best_bid_price) + parseFloat(data.best_ask_price)) / 2;
+        if (mid > 0) {
+          this.spotPrice = mid;
+        }
+      }
+      
+      // Format and send market data
+      const marketData = {
+        instrument: instrument,
+        best_bid_price: data.best_bid_price,
+        best_ask_price: data.best_ask_price,
+        mark_price: data.mark_price,
+        last_price: data.last_price,
+        timestamp: data.timestamp
+      };
+      
+      if (this.onData) {
+        this.onData(instrument, marketData);
+      }
+    }
   }
-}
 
-  send(data) {
+  send(message) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(data));
+      this.ws.send(JSON.stringify(message));
     }
   }
 
-  cleanup() {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
-    if (this.metadataTimer) {
-      clearTimeout(this.metadataTimer);
-      this.metadataTimer = null;
-    }
-    this.subscribedChannels.clear();
-    this.spotPriceReceived = false;
-    this.pendingConfig = null;
+  request(message) {
+    return new Promise((resolve, reject) => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error('WebSocket not connected'));
+        return;
+      }
+      
+      const id = message.id || this.requestId++;
+      message.id = id;
+      
+      this.pendingRequests.set(id, { resolve, reject });
+      
+      this.send(message);
+      
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          reject(new Error('Request timeout'));
+        }
+      }, 30000);
+    });
   }
 
   disconnect() {
-    this.cleanup();
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
-    this.isConnected = false;
+    this.pendingRequests.clear();
   }
 }
 

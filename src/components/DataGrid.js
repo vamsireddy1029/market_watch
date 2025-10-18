@@ -116,70 +116,83 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
     return names[baseExchange] || baseExchange.toUpperCase();
   };
 
-  // ✅ Detect spot/perpetual price for any exchange
   const getSpotPrice = (rows, exchangeKey) => {
-    if (!rows || rows.length === 0) return null;
+  if (!rows || rows.length === 0) return null;
 
-    const baseExchange = exchangeKey.split("_")[0].toLowerCase();
-    const config = appliedConfig?.[exchangeKey];
-    const symbol = (config?.symbol || "BTC").toUpperCase();
+  const baseExchange = exchangeKey.split("_")[0].toLowerCase();
+  const config = appliedConfig?.[exchangeKey];
+  const symbol = (config?.symbol || "BTC").toUpperCase();
 
-    // Deribit perpetual
-    if (baseExchange === "deribit") {
-      const perpInstrument = `${symbol}-PERPETUAL`;
-      const perp = rows.find(
-        (r) => (r.instrument || "").toUpperCase() === perpInstrument
-      );
-      if (perp) {
-        const val = parseFloat(perp.mark_price ?? perp.last_price);
-        return Number.isFinite(val) ? val.toFixed(2) : null;
-      }
-      return null;
+  // Deribit perpetual
+  if (baseExchange === "deribit") {
+    const perpInstrument = `${symbol}-PERPETUAL`;
+    const perp = rows.find(
+      (r) => (r.instrument || "").toUpperCase() === perpInstrument
+    );
+    if (perp) {
+      const val = parseFloat(perp.mark_price ?? perp.last_price);
+      return Number.isFinite(val) ? val.toFixed(2) : null;
     }
+    return null;
+  }
 
-    // Binance / Bybit
-    if (["binance", "bybit"].includes(baseExchange)) {
-      const match = (r, t) =>
-        (r?.type || "").toLowerCase() === t &&
-        (r.instrument || "")
-          .toLowerCase()
-          .startsWith(`${symbol.toLowerCase()}usdt`);
-      const spot = rows.find((r) => match(r, "spot"));
-      const fut = rows.find((r) => match(r, "future"));
-      const val = spot
-        ? parseFloat(spot.mark_price ?? spot.last_price)
-        : fut
-        ? parseFloat(fut.mark_price ?? fut.last_price)
-        : null;
+  // Binance / Bybit
+  if (baseExchange === "binance") {
+    const match = (r, t) =>
+      (r?.type || "").toLowerCase() === t &&
+      (r.instrument || "").toUpperCase() === 'BTCUSDT';
+    const spot = rows.find((r) => match(r, "spot"));
+    const fut = rows.find(
+      (r) => (r?.type || "").toLowerCase() === "future" &&
+             (r.instrument || "").toUpperCase() === 'BTCUSDT'
+    );
+    const val = spot
+      ? parseFloat(spot.mark_price ?? spot.last_price)
+      : fut
+      ? parseFloat(fut.mark_price ?? fut.last_price)
+      : null;
+    return Number.isFinite(val) ? val.toFixed(2) : null;
+  }
+  
+  if (baseExchange === "bybit") {
+    // Bybit only has futures (perpetual), not spot
+    const fut = rows.find(
+      (r) => (r?.type || "").toLowerCase() === "future" &&
+             (r.instrument || "").toUpperCase() === 'BTCUSDT'
+    );
+    if (fut) {
+      const val = parseFloat(fut.mark_price ?? fut.last_price);
+      return Number.isFinite(val) ? val.toFixed(2) : null;
+    }
+    return null;
+  }
+
+  if (baseExchange === 'okx') {
+    // Perpetual (BTC-USDT-SWAP or BTC-USD-SWAP)
+    const perp = rows.find((r) =>
+      (r.instrument || '').toUpperCase() === `${symbol}-USDT-SWAP` ||
+      (r.instrument || '').toUpperCase() === `${symbol}-USD-SWAP`
+    );
+    if (perp) {
+      const val = parseFloat(perp.mark_price ?? perp.last_price);
+      return Number.isFinite(val) ? val.toFixed(2) : null;
+    }
+    
+    // Spot (BTC-USDT, not BTC-USDT-SWAP)
+    const spot = rows.find(
+      (r) => (r.instrument || '').toUpperCase() === `${symbol}-USDT` &&
+             (r?.type || '').toLowerCase() === 'spot'
+    );
+    if (spot) {
+      const val = parseFloat(spot.last_price);
       return Number.isFinite(val) ? val.toFixed(2) : null;
     }
 
-    if (baseExchange === 'okx') {
-  // Perpetual (BTC-USDT-SWAP or BTC-USD-SWAP)
-  const perp = rows.find((r) =>
-    (r.instrument || '').toUpperCase() === `${symbol}-USDT-SWAP` ||
-    (r.instrument || '').toUpperCase() === `${symbol}-USD-SWAP`
-  );
-  if (perp) {
-    const val = parseFloat(perp.mark_price ?? perp.last_price);
-    return Number.isFinite(val) ? val.toFixed(2) : null;
-  }
-
-  // Spot (BTC-USDT, not BTC-USDT-SWAP)
-  const spot = rows.find(
-    (r) => (r.instrument || '').toUpperCase() === `${symbol}-USDT` &&
-           (r?.type || '').toLowerCase() === 'spot'
-  );
-  if (spot) {
-    const val = parseFloat(spot.last_price);
-    return Number.isFinite(val) ? val.toFixed(2) : null;
+    return null;
   }
 
   return null;
-}
-
-    return null;
-  };
+};
 
   // Sorting controls
   const handleSort = (exchange, key) => {

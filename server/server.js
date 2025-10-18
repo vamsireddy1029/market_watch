@@ -39,39 +39,76 @@ const CONFIG_FILE_PATH = path.join(__dirname, 'strategy-configs.json');
  * @returns {string} - Properly formatted key
  */
 
+
 function formatMarketDataKey(exchange, instrument, config = {}) {
   const baseExchange = exchange.split('_')[0].toLowerCase();
   const instrumentUpper = (instrument || '').toUpperCase();
   
-  // ✅ Deribit: Simple format - deribit_BTC-PERPETUAL or deribit_BTC-27MAR26
-  if (baseExchange === 'deribit') {
-    return `deribit_${instrumentUpper}`;
-  }
+  let formattedKey;
   
-  // ✅ Binance: binance_BTCUSDT or binance_BTCUSDT_241227
+  // ✅ BINANCE: Format properly
   if (baseExchange === 'binance') {
-    return `binance_${instrumentUpper}`;
+    // For options: BTC-251019-106000-C → binance_BTC-251019-106000-C
+    // For futures: BTCUSDT_241227 → binance_BTCUSDT_241227
+    // For perpetual: BTCUSDT → binance_BTCUSDT
+    
+    if (instrumentUpper.includes('-') && instrumentUpper.match(/-\d+-[CP]$/)) {
+      // Option format
+      formattedKey = `binance_${instrumentUpper}`;
+    } else if (instrumentUpper.includes('_')) {
+      // Future with expiry: BTCUSDT_241227
+      formattedKey = `binance_${instrumentUpper}`;
+    } else {
+      // Perpetual: BTCUSDT
+      formattedKey = `binance_${instrumentUpper}`;
+    }
   }
   
-  // ✅ Bybit: bybit_BTCUSDT or bybit_BTCUSDT-27DEC24
-  if (baseExchange === 'bybit') {
-    return `bybit_${instrumentUpper}`;
+  // ✅ DERIBIT: Extract symbol from config or instrument
+  else if (baseExchange === 'deribit') {
+    let symbol = (config.symbol || 'BTC').toLowerCase();
+    
+    if (!config.symbol && instrumentUpper.includes('-')) {
+      const parts = instrumentUpper.split('-');
+      if (parts.length >= 1) {
+        symbol = parts[0].toLowerCase();
+      }
+    }
+    
+    formattedKey = `deribit_${symbol}_${instrumentUpper}`;
   }
   
-  // ✅ OKX: okx_BTC-USDT-SWAP or okx_BTC-USDT-250328-3000-C
-  if (baseExchange === 'okx') {
-    return `okx_${instrumentUpper}`;
+  // ✅ BYBIT
+  else if (baseExchange === 'bybit') {
+    formattedKey = `bybit_${instrumentUpper}`;
   }
   
-  // ✅ Lighter: lighter_BTC-USD
-  if (baseExchange === 'lighter') {
-    return `lighter_${instrumentUpper}`;
+  // ✅ OKX
+  else if (baseExchange === 'okx') {
+    let symbol = (config.symbol || 'BTC').toLowerCase();
+    
+    if (!config.symbol && instrumentUpper.includes('-')) {
+      const parts = instrumentUpper.split('-');
+      if (parts.length >= 1) {
+        symbol = parts[0].toLowerCase();
+      }
+    }
+    
+    formattedKey = `okx_${symbol}_${instrumentUpper}`;
+  }
+  
+  // ✅ LIGHTER
+  else if (baseExchange === 'lighter') {
+    formattedKey = `lighter_${instrumentUpper}`;
   }
   
   // Fallback
-  return `${baseExchange}_${instrumentUpper}`;
+  else {
+    formattedKey = `${baseExchange}_${instrumentUpper}`;
+  }
+  
+  return formattedKey;
 }
-
 // ==================== FILE I/O ====================
 async function loadConfigsFromFile() {
   try {
@@ -96,9 +133,10 @@ async function saveConfigsToFile(configs) {
 
 // ==================== WEBSOCKET BROADCASTING ====================
 function broadcastMarketData(key, data) {
-  // ✅ ADD THIS DEBUG
-  if (key.includes('bybit') && key.includes('16OCT25')) {
-    console.log('📊 [DEBUG] Bybit key being broadcast:', key);
+  // ✅ DEBUG: Log what we're broadcasting
+  if (key.includes('binance') && key.includes('251018')) {
+    console.log('📤 [BROADCAST] Key:', key);
+    console.log('📤 [BROADCAST] Data:', JSON.stringify(data, null, 2));
   }
   
   const message = JSON.stringify({ 
@@ -106,11 +144,17 @@ function broadcastMarketData(key, data) {
     data: { [key]: data } 
   });
   
+  let sentCount = 0;
   connectedClients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
+      sentCount++;
     }
   });
+  
+  if (key.includes('binance') && key.includes('251018')) {
+    console.log(`📤 [BROADCAST] Sent to ${sentCount} clients`);
+  }
 }
 
 function broadcastStrategyUpdates() {
@@ -165,17 +209,26 @@ function stopStrategyUpdates() {
 }
 
 // ==================== CONNECTOR HELPER ====================
+
+// ==================== CONNECTOR HELPER ====================
 function getConnector(exchange, onData, onMetadata) {
   const ex = exchange.toLowerCase();
-  if (ex === 'deribit') {
+  console.log(`🔧 Creating connector for: ${ex}`); // ✅ ADD DEBUG
+  
+  if (ex === 'deribit' || ex.startsWith('deribit_')) {
+    console.log('✅ Creating Deribit connector');
     return new DeribitConnector(onData, onMetadata);
-  } else if (ex === 'binance') {
+  } else if (ex === 'binance' || ex.startsWith('binance_')) {
+    console.log('✅ Creating Binance connector');
     return new BinanceConnector(onData, onMetadata);
-  } else if (ex === 'bybit') {
+  } else if (ex === 'bybit' || ex.startsWith('bybit_')) {
+    console.log('✅ Creating Bybit connector');
     return new BybitConnector(onData, onMetadata);
-  } else if (ex === 'lighter') {
+  } else if (ex === 'lighter' || ex.startsWith('lighter_')) {
+    console.log('✅ Creating Lighter connector');
     return new LighterConnector(onData, onMetadata);
-  } else if (ex === 'okx') {
+  } else if (ex === 'okx' || ex.startsWith('okx_')) {
+    console.log('✅ Creating OKX connector');
     return new OKXConnector(onData, onMetadata);
   }
   throw new Error(`Unknown exchange: ${exchange}`);
@@ -242,16 +295,25 @@ app.post('/api/configs/delete', async (req, res) => {
   }
 });
 
-// ==================== METADATA ENDPOINT ====================
 app.post('/api/fetch-metadata', async (req, res) => {
-  const { exchange, instrumentType, symbol } = req.body;
-  
+  const { exchange, instrumentType, symbol, strategy } = req.body; // ✅ ADD strategy
+  console.log('🚨 [FETCH-METADATA] Request received:', req.body);
   try {
-    const baseExchange = exchange.split('_')[0];
-    console.log(`📡 Fetching ${instrumentType || 'option'} metadata for ${baseExchange} (${symbol || 'BTC'})...`);
+    let baseExchange = exchange;
+    if (exchange && exchange.includes('_')) {
+      baseExchange = exchange.split('_')[0];
+    }
+    
+    baseExchange = baseExchange.toLowerCase();
+    const symbolToUse = symbol || 'BTC';
+    
+    // ✅ NEW: For Jelly/Synthetic, fetch both option and future
+    const isJellyOrSynthetic = strategy && ['jelly', 'synthetic'].includes(strategy.toLowerCase());
+    
+    console.log(`📡 Fetching metadata for ${baseExchange} (${symbolToUse}, type: ${instrumentType}, strategy: ${strategy})...`);
     
     const onData = (rawKey, data) => {
-      const key = formatMarketDataKey(exchange, data.instrument, { symbol });
+      const key = formatMarketDataKey(exchange, data.instrument, { symbol: symbolToUse });
       console.log('💾 [Metadata] Storing:', key);
       marketData[key] = data;
       strategyCalculator.updateMarketData(key, data);
@@ -259,30 +321,103 @@ app.post('/api/fetch-metadata', async (req, res) => {
     };
     
     const onMetadata = (ex, data) => {
-      metadata[ex] = data;
+      console.log(`📊 Metadata received for ${ex}:`, {
+        expiries: data.expiries?.length || 0,
+        futureExpiries: data.futureExpiries?.length || 0,
+        optionExpiries: data.optionExpiries?.length || 0
+      });
+      
+      // ✅ MERGE metadata instead of replacing
+      if (!metadata[baseExchange]) {
+        metadata[baseExchange] = data;
+      } else {
+        metadata[baseExchange] = {
+          ...metadata[baseExchange],
+          ...data,
+          expiries: [...new Set([...(metadata[baseExchange].expiries || []), ...(data.expiries || [])])],
+          futureExpiries: [...new Set([...(metadata[baseExchange].futureExpiries || []), ...(data.futureExpiries || [])])],
+          optionExpiries: [...new Set([...(metadata[baseExchange].optionExpiries || []), ...(data.optionExpiries || [])])],
+          instruments: { ...(metadata[baseExchange].instruments || {}), ...(data.instruments || {}) }
+        };
+      }
     };
     
+    console.log(`🔧 Creating connector for: ${baseExchange}`);
     const tempConnector = getConnector(baseExchange, onData, onMetadata);
-    await tempConnector.connect({ 
-      isMetadataFetch: true,
-      instrumentType: instrumentType || 'option',
-      symbol: symbol || 'BTC'
+    
+    // ✅ NEW: If Jelly/Synthetic, fetch both types
+    if (isJellyOrSynthetic) {
+      console.log('🎯 Jelly/Synthetic detected - fetching BOTH options and futures...');
+      
+      // Fetch options first
+      await tempConnector.connect({ 
+        isMetadataFetch: true,
+        instrumentType: 'option',
+        symbol: symbolToUse
+      });
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Disconnect and reconnect for futures
+      if (tempConnector && typeof tempConnector.disconnect === 'function') {
+        tempConnector.disconnect();
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      const futureConnector = getConnector(baseExchange, onData, onMetadata);
+      await futureConnector.connect({ 
+        isMetadataFetch: true,
+        instrumentType: 'future',
+        symbol: symbolToUse
+      });
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      if (futureConnector && typeof futureConnector.disconnect === 'function') {
+        futureConnector.disconnect();
+      }
+    } else {
+      // Original single fetch
+      await tempConnector.connect({ 
+        isMetadataFetch: true,
+        instrumentType: instrumentType || 'all',
+        symbol: symbolToUse
+      });
+      console.log("hello: ",instrumentType)
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      if (tempConnector && typeof tempConnector.disconnect === 'function') {
+        tempConnector.disconnect();
+      }
+    }
+    
+    const metadataResult = metadata[baseExchange];
+    
+    if (!metadataResult) {
+      console.error(`❌ No metadata found for ${baseExchange}`);
+      return res.status(500).json({ 
+        success: false, 
+        error: `No metadata available for ${baseExchange}` 
+      });
+    }
+    
+    console.log(`✅ Returning metadata for ${baseExchange}:`, {
+      optionExpiries: metadataResult?.optionExpiries?.length || 0,
+      futureExpiries: metadataResult?.futureExpiries?.length || 0
     });
     
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    if (tempConnector) tempConnector.disconnect();
-    
-    res.json({ success: true, metadata: metadata[baseExchange.toLowerCase()] });
+    res.json({ success: true, metadata: metadataResult });
   } catch (error) {
     console.error('❌ Metadata fetch error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 // ==================== STREAMING ENDPOINTS ====================
 app.post('/api/start-streaming', async (req, res) => {
   const { exchanges, config } = req.body;
+  
+  console.log('🚀 [START-STREAMING] Request received:', {
+    exchanges,
+    config
+  });
   
   try {
     for (const exchange of exchanges) {
@@ -290,7 +425,7 @@ app.post('/api/start-streaming', async (req, res) => {
       
       const baseExchange = exchange.split('_')[0];
       
-      // Stop existing connector for this specific instance
+      // Stop existing connector
       if (activeConnectors[exchange]) {
         console.log(`🛑 Stopping existing ${exchange} connector...`);
         activeConnectors[exchange].disconnect();
@@ -298,19 +433,26 @@ app.post('/api/start-streaming', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       
-      // Clear old data for this exchange instance
+      // Clear old data
       console.log(`🧹 Clearing old data for ${exchange}...`);
       Object.keys(marketData).forEach(key => {
-        if (key.startsWith(`${exchange}_`)) {
+        if (key.startsWith(`${baseExchange}_`)) {
           console.log(`🗑️ Deleting old key: ${key}`);
           delete marketData[key];
         }
       });
       
-      // Create onData callback with proper key formatting
-      const onData = (rawKey, data) => {
-        const key = formatMarketDataKey(exchange, data.instrument, config[exchange]);
-
+      // ✅ CRITICAL: Create onData callback with proper key formatting
+      const onData = (rawInstrument, data) => {
+        const key = formatMarketDataKey(exchange, data.instrument, config[exchange] || {});
+        
+        console.log(`💾 [${exchange}] Storing key: ${key}`);
+        console.log(`💾 [${exchange}] Data:`, {
+          instrument: data.instrument,
+          bid: data.best_bid_price,
+          ask: data.best_ask_price
+        });
+        
         marketData[key] = data;
         strategyCalculator.updateMarketData(key, data);
         broadcastMarketData(key, data);
@@ -326,7 +468,19 @@ app.post('/api/start-streaming', async (req, res) => {
       activeConnectors[exchange] = connector;
       
       await new Promise(resolve => setTimeout(resolve, 1500));
-      console.log(`✅ ${exchange} connector started with symbol: ${config[exchange]?.symbol || 'BTC'}`);
+      console.log(`✅ ${exchange} connector started with config:`, config[exchange]);
+    }
+    
+    // ✅ DEBUG: Log marketData keys after streaming starts
+    console.log(`📊 [MARKETDATA] Total keys: ${Object.keys(marketData).length}`);
+    
+    const binanceKeys = Object.keys(marketData).filter(k => k.startsWith('binance'));
+    console.log(`📊 [MARKETDATA] Binance keys: ${binanceKeys.length}`);
+    if (binanceKeys.length > 0) {
+      console.log(`📊 [MARKETDATA] Sample Binance keys:`, binanceKeys.slice(0, 5));
+    } else {
+      console.warn(`⚠️ [MARKETDATA] NO BINANCE KEYS FOUND!`);
+      console.log(`📊 [MARKETDATA] All keys:`, Object.keys(marketData).slice(0, 10));
     }
     
     res.json({ success: true });
@@ -362,17 +516,25 @@ app.post('/api/stop-streaming', async (req, res) => {
 });
 
 // ==================== STRATEGY ENDPOINTS ====================
+// ==================== STRATEGY ENDPOINTS ====================
 app.post('/api/strategy/add', async (req, res) => {
   try {
     const { tableId, config } = req.body;
+    
+    if (!config.symbol) {
+      config.symbol = 'BTC';
+    }
     
     if (!tableId || !config) {
       return res.status(400).json({ success: false, error: 'tableId and config required' });
     }
     
-    // Stop existing connectors for this strategy
+    console.log('📊 Adding strategy:', { tableId, config });
+    
+    // Stop existing connectors
     Object.keys(strategyConnectors).forEach(key => {
       if (key.startsWith(`${tableId}_`)) {
+        console.log(`🛑 Stopping existing connector: ${key}`);
         strategyConnectors[key].disconnect();
         delete strategyConnectors[key];
       }
@@ -381,57 +543,112 @@ app.post('/api/strategy/add', async (req, res) => {
     strategyCalculator.addStrategy(tableId, config);
     
     const exchange = config.exchange.toLowerCase();
+    const symbol = (config.symbol || 'BTC').toLowerCase();
+    const baseConnectorKey = `${tableId}_${exchange}_${symbol}`;
     
-    const onData = (rawKey, data) => {
+    console.log(`🔧 Creating connectors with base key: ${baseConnectorKey}`);
+    
+    // ✅ CRITICAL FIX: Proper onData callback
+    const onData = (rawInstrument, data) => {
+      // Use the data.instrument field (already formatted correctly by connector)
       const key = formatMarketDataKey(exchange, data.instrument, config);
-      console.log('💾 [Strategy] Storing:', key);
+      
+      // Debug for Binance options
+      if (exchange === 'binance' && data.instrument.includes('-')) {
+        console.log(`💾 [Strategy ${tableId}] Key: ${key}`);
+        console.log(`💾 [Strategy ${tableId}] Instrument: ${data.instrument}`);
+      }
+      
       marketData[key] = data;
       strategyCalculator.updateMarketData(key, data);
       broadcastMarketData(key, data);
     };
     
-    // Handle Jelly strategy separately (dual subscriptions)
+    const onMetadata = () => {};
+    
+    // ... rest of your strategy setup code (Jelly, Synthetic, C-F/F, etc.)
+    
     if (config.strategy.toLowerCase() === 'jelly') {
       console.log('🎯 Setting up Jelly strategy with dual subscriptions...');
       
-      // Subscribe to OPTIONS
       const optionConnectorConfig = {
         isMetadataFetch: false,
         instrumentType: 'option',
         expiry: config.optionExpiry,
         strikeInterval: config.strikeInterval,
         noPrtFolio: config.noPrtFolio,
-        strategy: config.strategy
+        strategy: config.strategy,
+        symbol: config.symbol
       };
       
-      const optionConnector = getConnector(exchange, onData, () => {});
+      console.log('📡 Creating option connector...');
+      const optionConnector = getConnector(exchange, onData, onMetadata);
       await optionConnector.connect(optionConnectorConfig);
-      strategyConnectors[`${tableId}_option`] = optionConnector;
+      strategyConnectors[`${baseConnectorKey}_option`] = optionConnector;
+      console.log(`✅ Option connector created`);
       
-      // Subscribe to FUTURES
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       const futureConnectorConfig = {
         isMetadataFetch: false,
         instrumentType: 'future',
         futureExpiry: config.futureExpiry,
-        strategy: config.strategy
+        strategy: config.strategy,
+        symbol: config.symbol
       };
+      
+      console.log('📡 Creating future connector...');
+      const futureConnector = getConnector(exchange, onData, onMetadata);
+      await futureConnector.connect(futureConnectorConfig);
+      strategyConnectors[`${baseConnectorKey}_future`] = futureConnector;
+      console.log(`✅ Future connector created`);
+      
+    } else if (config.strategy.toLowerCase() === 'synthetic') {
+      // Synthetic setup...
+      const optionConnectorConfig = {
+        isMetadataFetch: false,
+        instrumentType: 'option',
+        expiry: config.optionExpiry,
+        strikeInterval: config.strikeInterval,
+        noPrtFolio: config.noPrtFolio,
+        strategy: config.strategy,
+        symbol: config.symbol
+      };
+      
+      const optionConnector = getConnector(exchange, onData, onMetadata);
+      await optionConnector.connect(optionConnectorConfig);
+      strategyConnectors[`${baseConnectorKey}_option`] = optionConnector;
       
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      const futureConnector = getConnector(exchange, onData, () => {});
+      const futureConnectorConfig = {
+        isMetadataFetch: false,
+        instrumentType: 'future',
+        futureExpiry: config.optionExpiry,
+        strategy: config.strategy,
+        symbol: config.symbol
+      };
+      
+      const futureConnector = getConnector(exchange, onData, onMetadata);
       await futureConnector.connect(futureConnectorConfig);
-      strategyConnectors[`${tableId}_future`] = futureConnector;
+      strategyConnectors[`${baseConnectorKey}_future`] = futureConnector;
       
     } else {
-      // Original logic for other strategies
+      // Other strategies...
       let instrumentType, expiryToSubscribe;
       
       if (config.strategy.toLowerCase() === 'c-f/f') {
         instrumentType = 'future';
-        expiryToSubscribe = config.futureExpiry || config.fut1Expiry;
+        
+        const fut1IsAll = !config.fut1Expiry || config.fut1Expiry === 'all';
+        const fut2IsAll = !config.fut2Expiry || config.fut2Expiry === 'all';
+        
+        expiryToSubscribe = (fut1IsAll || fut2IsAll) ? null : config.futureExpiry;
+        console.log('📋 C-F/F Strategy - subscribing to futures');
       } else {
         instrumentType = 'option';
         expiryToSubscribe = config.optionExpiry;
+        console.log(`📋 ${config.strategy} Strategy - subscribing to options`);
       }
       
       const connectorConfig = {
@@ -441,23 +658,43 @@ app.post('/api/strategy/add', async (req, res) => {
         strikeInterval: config.strikeInterval,
         noPrtFolio: config.noPrtFolio,
         strategy: config.strategy,
-        futureExpiry: config.futureExpiry
+        futureExpiry: config.futureExpiry,
+        fut1Expiry: config.fut1Expiry,
+        fut2Expiry: config.fut2Expiry,
+        symbol: config.symbol,
+        selectedFutures: config.selectedFutures,
+        subscribeAllFutures: config.strategy.toLowerCase() === 'c-f/f'
       };
       
-      const connector = getConnector(exchange, onData, () => {});
+      console.log('📡 Creating connector...');
+      const connector = getConnector(exchange, onData, onMetadata);
       await connector.connect(connectorConfig);
-      strategyConnectors[tableId] = connector;
+      strategyConnectors[baseConnectorKey] = connector;
+      console.log(`✅ Connector created`);
     }
     
     startStrategyUpdates();
-
+    
     console.log('⏳ Waiting for market data...');
     await new Promise(resolve => setTimeout(resolve, 5000));
-
+    
     const result = strategyCalculator.calculateStrategy(tableId);
-    console.log(`📊 Strategy data: ${result?.data?.length || 0} rows`);
-
+    
+    console.log(`📊 Strategy calculation result: ${result?.data?.length || 0} rows`);
+    
+    // ✅ DEBUG: Check marketData keys
+    const relevantKeys = Object.keys(marketData).filter(k => 
+      k.startsWith(`${exchange}_`)
+    );
+    console.log(`📊 Market data keys for ${exchange}: ${relevantKeys.length}`);
+    if (relevantKeys.length > 0) {
+      console.log(`📊 Sample keys:`, relevantKeys.slice(0, 10));
+    } else {
+      console.warn(`⚠️ NO MARKET DATA KEYS for ${exchange}!`);
+    }
+    
     res.json({ success: true, data: result });
+    
   } catch (error) {
     console.error('❌ Add strategy error:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -472,22 +709,39 @@ app.post('/api/strategy/remove', (req, res) => {
       return res.status(400).json({ success: false, error: 'tableId required' });
     }
     
+    console.log(`🗑️ Removing strategy: ${tableId}`);
+    
+    // ✅ Disconnect all connectors for this table
     Object.keys(strategyConnectors).forEach(key => {
       if (key.startsWith(`${tableId}_`)) {
+        console.log(`🛑 Disconnecting connector: ${key}`);
         strategyConnectors[key].disconnect();
         delete strategyConnectors[key];
       }
     });
     
+    // ✅ Remove from calculator
     strategyCalculator.removeStrategy(tableId);
     
+    // ✅ Stop updates if no active strategies
     if (strategyCalculator.activeStrategies.size === 0) {
+      console.log('⏸️ No active strategies, stopping updates...');
       stopStrategyUpdates();
     }
     
     res.json({ success: true });
   } catch (error) {
     console.error('❌ Remove strategy error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/strategy/all', (req, res) => {
+  try {
+    const strategies = strategyCalculator.calculateAllStrategies();
+    res.json({ success: true, data: strategies });
+  } catch (error) {
+    console.error('❌ Get strategies error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -708,4 +962,4 @@ process.on('SIGTERM', () => {
       process.exit(0);
     });
   });
-});
+  });

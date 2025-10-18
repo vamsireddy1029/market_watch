@@ -60,7 +60,6 @@ const ExchangeSelector = ({
 
     if (!exchangeConfig) return null;
 
-    // Lighter block (perpetuals only)
     if (baseExchange === "lighter") {
       return (
         <div className="exchange-config-card" key={exchangeId}>
@@ -102,16 +101,15 @@ const ExchangeSelector = ({
 
     const symbol = (exchangeConfig.symbol || "BTC").toUpperCase();
 
-    // Determine spot price key based on exchange
     let spotKey;
     if (baseExchange === "deribit") {
-      spotKey = `${exchangeId}_${symbol}-PERPETUAL`;
+      spotKey = `${exchangeId}_${symbol.toLowerCase()}-perpetual`;
     } else if (baseExchange === "binance") {
       spotKey = "binance_btcusdt";
-    } else if (baseExchange === "okx") {
-      spotKey = `okx_${symbol.toLowerCase()}-usdt-swap`; 
-    } else {
+    } else if (baseExchange === "bybit") {
       spotKey = "bybit_btcusdt";
+    } else if (baseExchange === "okx") {
+      spotKey = `okx_${symbol.toLowerCase()}_${symbol.toLowerCase()}-usdt-swap`; 
     }
 
     const spotData = marketData?.[spotKey];
@@ -159,11 +157,9 @@ const ExchangeSelector = ({
               )}
             </div>
           </div>
-        
         </div>
 
         <div className="config-grid">
-          {/* Symbol selector for OKX + Deribit */}
           {["deribit", "okx"].includes(baseExchange) && (
             <div className="form-group">
               <label>Symbol</label>
@@ -200,10 +196,16 @@ const ExchangeSelector = ({
                   <option value="spot">💰 Spot</option>
                   <option value="option">🎯 Options</option>
                 </>
+              ) : baseExchange === "binance" ? (
+                <>
+                  <option value="future">📈 Futures</option>
+                  <option value="option">🎯 Options</option>
+                </>
               ) : (
                 instrumentTypes
                   .filter(t => {
                     if (baseExchange === "deribit") return t.value !== "spot";
+                    if (baseExchange === "bybit") return t.value === "future" || t.value === "option";
                     return t.value === "future" || t.value === "option";
                   })
                   .map((type) => (
@@ -225,7 +227,7 @@ const ExchangeSelector = ({
                 }
               >
                 <option value="">All Expiries</option>
-                {exchangeData.expiries
+                {exchangeData.optionExpiries
                   ?.slice()
                   .sort((a, b) => parseExpiry(a) - parseExpiry(b))
                   .map((expiry) => (
@@ -238,7 +240,6 @@ const ExchangeSelector = ({
           )}
         </div>
 
-        {/* Options Section */}
         {exchangeConfig.instrumentType === "option" && (
           <>
             <div className="config-grid">
@@ -328,7 +329,6 @@ const ExchangeSelector = ({
           </>
         )}
 
-        {/* Futures/Spot/Swap Section */}
         {["future", "swap", "spot", "futures"].includes(exchangeConfig.instrumentType) && (
           <div className="action-buttons">
             <button className="submit-btnn" onClick={() => onSubmit(exchangeId)}>

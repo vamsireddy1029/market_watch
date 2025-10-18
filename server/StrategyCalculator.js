@@ -16,180 +16,199 @@ class StrategyCalculator {
     this.activeStrategies.delete(tableId);
   }
 
-  // In StrategyCalculator.js - Only the relevant methods
-
-getSpotPrice(exchange) {
-  const ex = exchange.toLowerCase();
-  
-  let perpetualKey;
-  if (ex === 'binance') {
-    perpetualKey = 'binance_BTCUSDT';
-  } else if (ex === 'deribit') {
-    perpetualKey = 'deribit_BTC-PERPETUAL';  // ✅ Simple format
-  } else if (ex === 'bybit') {
-    perpetualKey = 'bybit_BTCUSDT'; 
-  } else {
-    console.log(`❌ Unknown exchange: ${ex}`);
-    return 0;
-  }
-  
-  const val = this.marketData[perpetualKey];
-  console.log(`🔍 getSpotPrice: Looking for ${perpetualKey}`);
-
-  if (val) {
-    const bid = parseFloat(val.best_bid_price);
-    const ask = parseFloat(val.best_ask_price);
-    if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
-      console.log(`✅ getSpotPrice: Found ${perpetualKey}, bid=${bid}, ask=${ask}`);
-      return (bid + ask) / 2;
-    }
-    const last = parseFloat(val.last_price);
-    if (Number.isFinite(last) && last > 0) {
-      return last;
-    }
-  }
-  
-  console.log(`❌ getSpotPrice: ${perpetualKey} not found or invalid`);
-  return 0;
-}
-getFuturePrice(exchange, futureExpiry) {
-  const ex = exchange.toLowerCase();
-
-  // If no futureExpiry, return perpetual
-  if (!futureExpiry) {
+  getSpotPrice(exchange, symbol = 'BTC') {
+    const ex = exchange.toLowerCase();
+    const sym = symbol.toLowerCase();
+    
     let perpetualKey;
     if (ex === 'binance') {
       perpetualKey = 'binance_BTCUSDT';
     } else if (ex === 'deribit') {
-      perpetualKey = 'deribit_BTC-PERPETUAL';  // ✅ Simple format
+      perpetualKey = `deribit_${sym}_${symbol.toUpperCase()}-PERPETUAL`;
     } else if (ex === 'bybit') {
-      perpetualKey = 'bybit_BTCUSDT';
+      perpetualKey = 'bybit_BTCUSDT'; 
     } else {
-      return { bid: 0, ask: 0, mid: 0 };
+      console.log(`❌ Unknown exchange: ${ex}`);
+      return 0;
     }
     
     const val = this.marketData[perpetualKey];
+    console.log(`🔍 getSpotPrice: Looking for ${perpetualKey}`);
+
     if (val) {
       const bid = parseFloat(val.best_bid_price);
       const ask = parseFloat(val.best_ask_price);
       if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
+        console.log(`✅ getSpotPrice: Found ${perpetualKey}, bid=${bid}, ask=${ask}`);
+        return (bid + ask) / 2;
+      }
+      const last = parseFloat(val.last_price);
+      if (Number.isFinite(last) && last > 0) {
+        return last;
+      }
+    }
+    
+    console.log(`❌ getSpotPrice: ${perpetualKey} not found or invalid`);
+    return 0;
+  }
+
+  getFuturePrice(exchange, futureExpiry, symbol = 'BTC') {
+    const ex = exchange.toLowerCase();
+    const sym = symbol.toLowerCase();
+    
+    if (!futureExpiry) {
+      let perpetualKey;
+      if (ex === 'binance') {
+        perpetualKey = 'binance_BTCUSDT';
+      } else if (ex === 'deribit') {
+        perpetualKey = `deribit_${sym}_${symbol.toUpperCase()}-PERPETUAL`;
+      } else if (ex === 'bybit') {
+        perpetualKey = 'bybit_BTCUSDT';
+      } else {
+        return { bid: 0, ask: 0, mid: 0 };
+      }
+      
+      const val = this.marketData[perpetualKey];
+      if (val) {
+        const bid = parseFloat(val.best_bid_price);
+        const ask = parseFloat(val.best_ask_price);
+        if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
+          return { bid, ask, mid: (bid + ask) / 2 };
+        }
+      }
+      return { bid: 0, ask: 0, mid: 0 };
+    }
+    
+    let key;
+    if (ex === 'binance') {
+      key = `binance_BTCUSDT_${futureExpiry}`;
+    } else if (ex === 'deribit') {
+      key = `deribit_${sym}_${symbol.toUpperCase()}-${futureExpiry}`;
+    } else if (ex === 'bybit') {
+      key = `bybit_BTCUSDT-${futureExpiry}`;
+    } else {
+      return { bid: 0, ask: 0, mid: 0 };
+    }
+    
+    console.log(`🔍 getFuturePrice: Looking for ${key}`);
+    
+    if (this.marketData[key]) {
+      const fut = this.marketData[key];
+      const bid = parseFloat(fut.best_bid_price);
+      const ask = parseFloat(fut.best_ask_price);
+       const last = parseFloat(fut.last_price);
+       
+       if (ex === 'binance' && (!Number.isFinite(bid) || bid === 0 || !Number.isFinite(ask) || ask === 0)) {
+        if (Number.isFinite(last) && last > 0) {
+          console.log(`⚠️ Using last_price as fallback for ${key}: ${last}`);
+          return { bid: last, ask: last, mid: last };
+        }
+      }
+      
+      if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
         return { bid, ask, mid: (bid + ask) / 2 };
       }
     }
-    return { bid: 0, ask: 0, mid: 0 };
-  }
-  
-  // ✅ Build simple key for each exchange
-  let key;
-  if (ex === 'binance') {
-    key = `binance_BTCUSDT_${futureExpiry}`;
-  } else if (ex === 'deribit') {
-    key = `deribit_BTC-${futureExpiry}`;  // ✅ Simple format
-  } else if (ex === 'bybit') {
-    key = `bybit_BTCUSDT-${futureExpiry}`;
-  } else {
-    return { bid: 0, ask: 0, mid: 0 };
-  }
-  
-  console.log(`🔍 getFuturePrice: Looking for ${key}`);
-  
-  if (this.marketData[key]) {
-    const fut = this.marketData[key];
-    const bid = parseFloat(fut.best_bid_price);
-    const ask = parseFloat(fut.best_ask_price);
     
-    if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask > 0) {
-      return { bid, ask, mid: (bid + ask) / 2 };
-    }
+    return { bid: 0, ask: 0, mid: 0 };
   }
-  
-  return { bid: 0, ask: 0, mid: 0 };
-}
 
-getAllFutureExpiries(exchange) {
+  getAllFutureExpiries(exchange, symbol = 'BTC') {
   const ex = exchange.toLowerCase();
+  const sym = symbol.toLowerCase();
   const expiries = new Set();
+  
+  console.log(`🔍 Searching for ${ex} ${symbol} futures in marketData...`);
+  console.log(`📊 Total marketData keys: ${Object.keys(this.marketData).length}`);
   
   for (const [key, val] of Object.entries(this.marketData)) {
     if (!val || !key.startsWith(`${ex}_`)) continue;
     
     if (ex === 'deribit') {
-      // Match: deribit_BTC-27MAR26
-      const match = key.match(/^deribit_BTC-(\d{1,2}[A-Z]{3}\d{2})$/);
+      // Match pattern: deribit_btc_BTC-24OCT25 or deribit_eth_ETH-24OCT25
+      const match = key.match(new RegExp(`^deribit_${sym}_${symbol.toUpperCase()}-(\\d{1,2}[A-Z]{3}\\d{2})$`));
       if (match && !key.includes('PERPETUAL')) {
         expiries.add(match[1]);
+        console.log(`✅ Found Deribit future: ${match[1]} from key: ${key}`);
       }
     } else if (ex === 'binance') {
-      // Match: binance_BTCUSDT_241227
-      const match = key.match(/^binance_BTCUSDT_(\d{6})$/);
+      // Match pattern: binance_BTCUSDT_241018
+      const match = key.match(/^binance_[A-Z]+USDT_(\d{6})$/);
       if (match) {
         expiries.add(match[1]);
+        console.log(`✅ Found Binance future: ${match[1]} from key: ${key}`);
       }
     } else if (ex === 'bybit') {
-      // Match: bybit_BTCUSDT-27DEC24
-      const match = key.match(/^bybit_BTCUSDT-(\d{2}[A-Z]{3}\d{2})$/i);
+      // Match pattern: bybit_BTCUSDT-18OCT24
+      const match = key.match(/^bybit_[A-Z]+USDT-(\d{2}[A-Z]{3}\d{2})$/i);
       if (match) {
         expiries.add(match[1].toUpperCase());
+        console.log(`✅ Found Bybit future: ${match[1]} from key: ${key}`);
       }
     }
   }
   
-  return Array.from(expiries).sort();
+  const result = Array.from(expiries).sort();
+  console.log(`📊 Total expiries found for ${ex} ${symbol}: ${result.length}`, result);
+  
+  return result;
 }
   
-  getOptionQuote(exchange, expiry, strike, type) {
-  const ex = exchange.toLowerCase();
-  let key;
-  
-  if (ex === 'bybit') {
-    key = `bybit_BTC-${expiry}-${strike}-${type}`;
-  } else if (ex === 'binance') {
-    key = `binance_BTCUSDT-${expiry}-${strike}-${type}`;
-  } else if (ex === 'deribit') {
-    key = `deribit_BTC-${expiry}-${strike}-${type}`;  // ✅ Simple format
-  }
-  
-  const q = this.marketData[key];
-  if (!q) {
-    console.log(`❌ Option quote not found: ${key}`);
-    
-    // Debug: Show available keys
-    const availableKeys = Object.keys(this.marketData)
-      .filter(k => k.startsWith(`${ex}_BTC-${expiry}`))
-      .slice(0, 5);
-    if (availableKeys.length > 0) {
-      console.log(`📊 Available keys for ${ex}_BTC-${expiry}:`, availableKeys);
-    }
-    return null;
-  }
-  
-  const bid = parseFloat(q.best_bid_price);
-  const ask = parseFloat(q.best_ask_price);
-  const mark = parseFloat(q.mark_price);
-  const last = parseFloat(q.last_price);
-  
-  const mid = Number.isFinite(bid) && Number.isFinite(ask) 
-    ? (bid + ask) / 2 
-    : (Number.isFinite(mark) ? mark : last);
-  
-  return {
-    bid: Number.isFinite(bid) ? bid : null,
-    ask: Number.isFinite(ask) ? ask : null,
-    mark: Number.isFinite(mark) ? mark : null,
-    mid: Number.isFinite(mid) ? mid : null,
-    last: Number.isFinite(last) ? last : null
-  };
-}
-  calculateJelly(config, strikes) {
-    const { exchange, optionExpiry, futureExpiry } = config;
+  getOptionQuote(exchange, expiry, strike, type, symbol = 'BTC') {
     const ex = exchange.toLowerCase();
-    const fut = this.getFuturePrice(ex, futureExpiry);
-    const spotPrice = this.getSpotPrice(ex);
-    const nearestStrike = Math.round(spotPrice / 1000) * 1000;
+    const sym = symbol.toUpperCase();
+    let key;
+    
+    if (ex === 'bybit') {
+      key = `bybit_${sym}-${expiry}-${strike}-${type}`;
+    } else if (ex === 'binance') {
+      key = `binance_${sym}-${expiry}-${strike}-${type}`
+    } else if (ex === 'deribit') {
+      key = `deribit_${symbol.toLowerCase()}_${sym}-${expiry}-${strike}-${type}`;
+    }
+    
+    const q = this.marketData[key];
+    if (!q) {
+      console.log(`❌ Option quote not found: ${key}`);
+      
+      const availableKeys = Object.keys(this.marketData)
+        .filter(k => k.startsWith(`${ex}_`) && k.includes(expiry))
+        .slice(0, 5);
+      if (availableKeys.length > 0) {
+        console.log(`📊 Available keys for ${ex}_*_${expiry}:`, availableKeys);
+      }
+      return null;
+    }
+    
+    const bid = parseFloat(q.best_bid_price);
+    const ask = parseFloat(q.best_ask_price);
+    const mark = parseFloat(q.mark_price);
+    const last = parseFloat(q.last_price);
+    
+    const mid = Number.isFinite(bid) && Number.isFinite(ask) 
+      ? (bid + ask) / 2 
+      : (Number.isFinite(mark) ? mark : last);
+    
+    return {
+      bid: Number.isFinite(bid) ? bid : null,
+      ask: Number.isFinite(ask) ? ask : null,
+      mark: Number.isFinite(mark) ? mark : null,
+      mid: Number.isFinite(mid) ? mid : null,
+      last: Number.isFinite(last) ? last : null
+    };
+  }
+
+  calculateJelly(config, strikes) {
+    const { exchange, optionExpiry, futureExpiry, symbol = 'BTC' } = config;
+    const ex = exchange.toLowerCase();
+    const fut = this.getFuturePrice(ex, futureExpiry, symbol);
+    const spotPrice = this.getSpotPrice(ex, symbol);
+    const strikeInterval = parseInt(config.strikeInterval) || (symbol === 'ETH' ? 50 : 1000);
+    const nearestStrike = Math.round(spotPrice / strikeInterval) * strikeInterval;
     
     return strikes.map(strike => {
-      const ce = this.getOptionQuote(ex, optionExpiry, strike, 'C');
-      const pe = this.getOptionQuote(ex, optionExpiry, strike, 'P');
+      const ce = this.getOptionQuote(ex, optionExpiry, strike, 'C', symbol);
+      const pe = this.getOptionQuote(ex, optionExpiry, strike, 'P', symbol);
       if (!ce || !pe) return null;
       
       const ce_bid = ce.bid;
@@ -216,70 +235,67 @@ getAllFutureExpiries(exchange) {
   }
 
   calculateSynthetic(config, strikes) {
-  const { exchange, optionExpiry } = config;
-  const ex = exchange.toLowerCase();
-  
-  // ✅ Try to get future with same expiry
-  let fut = this.getFuturePrice(ex, optionExpiry);
-  
-  const spotPrice = this.getSpotPrice(ex);
-  const nearestStrike = Math.round(spotPrice / 1000) * 1000;
-  
-  // ✅ Check if future exists for this expiry
-  const hasFuture = fut.bid && fut.ask && fut.bid > 0 && fut.ask > 0;
-  
-  if (hasFuture) {
-    console.log(`✅ Synthetic: Using future for expiry ${optionExpiry}`);
-    console.log(`📊 Future price: bid=${fut.bid}, ask=${fut.ask}`);
-  } else {
-    console.log(`⚠️ Synthetic: No future for ${optionExpiry}, using CE/PE only`);
-  }
-  
-  return strikes.map(strike => {
-    const ce = this.getOptionQuote(ex, optionExpiry, strike, 'C');
-    const pe = this.getOptionQuote(ex, optionExpiry, strike, 'P');
-    if (!ce || !pe) return null;
+    const { exchange, optionExpiry, symbol = 'BTC' } = config;
+    const ex = exchange.toLowerCase();
     
-    const ce_bid = ce.bid;
-    const ce_ask = ce.ask;
-    const pe_bid = pe.bid;
-    const pe_ask = pe.ask;
+    let fut = this.getFuturePrice(ex, optionExpiry, symbol);
     
-    let conversion = null;
-    let reversal = null;
+    const spotPrice = this.getSpotPrice(ex, symbol);
+    const strikeInterval = parseInt(config.strikeInterval) || (symbol === 'ETH' ? 50 : 1000);
+    const nearestStrike = Math.round(spotPrice / strikeInterval) * strikeInterval;
+    
+    const hasFuture = fut.bid && fut.ask && fut.bid > 0 && fut.ask > 0;
     
     if (hasFuture) {
-      // ✅ Original formula with future
-      if ([ce_bid, pe_ask, fut.ask, ce_ask, pe_bid, fut.bid].every(v => v !== null && v > 0)) {
-        conversion = (ce_bid + strike) - (pe_ask + fut.ask);
-        reversal = (pe_bid + fut.bid) - (ce_ask + strike);
-      }
+      console.log(`✅ Synthetic: Using future for expiry ${optionExpiry}`);
+      console.log(`📊 Future price: bid=${fut.bid}, ask=${fut.ask}`);
     } else {
-      // ✅ NEW: Synthetic without future - use CE/PE prices only
-      // Formula: Synthetic Long = CE_bid - PE_ask
-      //          Synthetic Short = PE_bid - CE_ask
-      if ([ce_bid, pe_ask, ce_ask, pe_bid].every(v => v !== null && v > 0)) {
-        conversion = ce_bid - pe_ask;
-        reversal = pe_bid - ce_ask;
-      }
+      console.log(`⚠️ Synthetic: No future for ${optionExpiry}, using CE/PE only`);
     }
     
-    return {
-      strike,
-      conversion: conversion !== null ? conversion.toFixed(2) : null,
-      reversal: reversal !== null ? reversal.toFixed(2) : null,
-      nearest_strike: nearestStrike,
-      ce_ltp: ce.last?.toFixed(2),
-      pe_ltp: pe.last?.toFixed(2)
-    };
-  }).filter(Boolean);
-}
+    return strikes.map(strike => {
+      const ce = this.getOptionQuote(ex, optionExpiry, strike, 'C', symbol);
+      const pe = this.getOptionQuote(ex, optionExpiry, strike, 'P', symbol);
+      if (!ce || !pe) return null;
+      
+      const ce_bid = ce.bid;
+      const ce_ask = ce.ask;
+      const pe_bid = pe.bid;
+      const pe_ask = pe.ask;
+      
+      let conversion = null;
+      let reversal = null;
+      
+      if (hasFuture) {
+        if ([ce_bid, pe_ask, fut.ask, ce_ask, pe_bid, fut.bid].every(v => v !== null && v > 0)) {
+          conversion = (ce_bid + strike) - (pe_ask + fut.ask);
+          reversal = (pe_bid + fut.bid) - (ce_ask + strike);
+        }
+      } else {
+        if ([ce_bid, pe_ask, ce_ask, pe_bid].every(v => v !== null && v > 0)) {
+          conversion = ce_bid - pe_ask;
+          reversal = pe_bid - ce_ask;
+        }
+      }
+      
+      return {
+        strike,
+        conversion: conversion !== null ? conversion.toFixed(2) : null,
+        reversal: reversal !== null ? reversal.toFixed(2) : null,
+        nearest_strike: nearestStrike,
+        ce_ltp: ce.last?.toFixed(2),
+        pe_ltp: pe.last?.toFixed(2)
+      };
+    }).filter(Boolean);
+  }
+
   calculateButterfly(config, strikes) {
-    const { exchange, optionExpiry, gap } = config;
+    const { exchange, optionExpiry, gap, symbol = 'BTC' } = config;
     const ex = exchange.toLowerCase();
-    const gapNum = parseInt(gap) || 1000;
-    const spotPrice = this.getSpotPrice(ex);
-    const nearestStrike = Math.round(spotPrice / 1000) * 1000;
+    const gapNum = parseInt(gap) || (symbol === 'ETH' ? 50 : 1000);
+    const spotPrice = this.getSpotPrice(ex, symbol);
+    const strikeInterval = parseInt(config.strikeInterval) || (symbol === 'ETH' ? 50 : 1000);
+    const nearestStrike = Math.round(spotPrice / strikeInterval) * strikeInterval;
     
     const results = [];
     
@@ -291,9 +307,9 @@ getAllFutureExpiries(exchange) {
         if (!strikes.includes(l1) || !strikes.includes(l3)) return;
         
         const optType = type === 'CE' ? 'C' : 'P';
-        const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType);
-        const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType);
-        const q3 = this.getOptionQuote(ex, optionExpiry, l3, optType);
+        const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType, symbol);
+        const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType, symbol);
+        const q3 = this.getOptionQuote(ex, optionExpiry, l3, optType, symbol);
         
         if (!q1 || !q2 || !q3) return;
         
@@ -318,19 +334,22 @@ getAllFutureExpiries(exchange) {
     });
     return results;
   }
+
   calculateCashFuture(config) {
-  const { exchange, fut1Expiry, fut2Expiry, noPrtFolio, selectedFutures } = config;
+  const { exchange, fut1Expiry, fut2Expiry, noPrtFolio, selectedFutures, symbol = 'BTC' } = config;
   const ex = exchange.toLowerCase();
   
   const results = [];
   
-  // Custom mode (manual selection)
+  // ✅ CUSTOM MODE: User has manually selected specific future pairs
   if (Array.isArray(selectedFutures) && selectedFutures.length > 0) {
+    console.log('📋 C-F/F Custom Mode - Processing selected futures:', selectedFutures);
+    
     selectedFutures.forEach(item => {
       const [itemExchange, fut1, fut2] = item.split('_');
       
-      const fut1Price = this.getFuturePrice(itemExchange.toLowerCase(), fut1 === 'perpetual' ? null : fut1);
-      const fut2Price = this.getFuturePrice(itemExchange.toLowerCase(), fut2);
+      const fut1Price = this.getFuturePrice(itemExchange.toLowerCase(), fut1 === 'perpetual' ? null : fut1, symbol);
+      const fut2Price = this.getFuturePrice(itemExchange.toLowerCase(), fut2, symbol);
       
       if (fut1Price.bid && fut1Price.ask && fut2Price.bid && fut2Price.ask) {
         const fs = fut2Price.bid - fut1Price.ask;
@@ -346,34 +365,67 @@ getAllFutureExpiries(exchange) {
       }
     });
     
+    console.log(`✅ Custom mode: ${results.length} rows generated`);
     return results;
   }
   
-  // Auto mode
+  // ✅ ALL EXPIRIES MODE: Generate all combinations
+  console.log('📋 C-F/F All Expiries Mode');
+  console.log(`📊 Config: fut1Expiry="${fut1Expiry}", fut2Expiry="${fut2Expiry}", symbol="${symbol}"`);
+  
   const fut1List = [];
   const fut2List = [];
   
-  // Get Fut1 list
-  if (fut1Expiry === '' || fut1Expiry === 'all') {
-    // Include perpetual + all futures
+  // ✅ Handle Fut1 selection
+  if (!fut1Expiry || fut1Expiry === '' || fut1Expiry === 'all' || fut1Expiry.toLowerCase() === 'all expiries') {
+    console.log('🔄 Fut1: Adding perpetual + all expiries');
     fut1List.push('perpetual');
-    fut1List.push(...this.getAllFutureExpiries(exchange));
+    const allExpiries = this.getAllFutureExpiries(exchange, symbol);
+    fut1List.push(...allExpiries);
+    console.log(`📊 Fut1 list: ${fut1List.length} items -`, fut1List);
+  } else if (fut1Expiry.toLowerCase() === 'perpetual') {
+    console.log('🔄 Fut1: Perpetual only');
+    fut1List.push('perpetual');
   } else {
+    console.log(`🔄 Fut1: Specific expiry - ${fut1Expiry}`);
     fut1List.push(fut1Expiry);
   }
   
-  // Get Fut2 list
-  if (fut2Expiry === '' || fut2Expiry === 'all') {
-    fut2List.push(...this.getAllFutureExpiries(exchange));
+  // ✅ Handle Fut2 selection
+  if (!fut2Expiry || fut2Expiry === '' || fut2Expiry === 'all' || fut2Expiry.toLowerCase() === 'all expiries') {
+    console.log('🔄 Fut2: Adding all expiries (no perpetual)');
+    const allExpiries = this.getAllFutureExpiries(exchange, symbol);
+    fut2List.push(...allExpiries);
+    console.log(`📊 Fut2 list: ${fut2List.length} items -`, fut2List);
   } else {
+    console.log(`🔄 Fut2: Specific expiry - ${fut2Expiry}`);
     fut2List.push(fut2Expiry);
   }
   
-  // Generate matrix
+  // ✅ Validate we have futures to process
+  if (fut1List.length === 0) {
+    console.warn('⚠️ No Fut1 expiries available!');
+    return [];
+  }
+  
+  if (fut2List.length === 0) {
+    console.warn('⚠️ No Fut2 expiries available!');
+    return [];
+  }
+  
+  console.log(`🔍 Generating combinations: ${fut1List.length} x ${fut2List.length} = ${fut1List.length * fut2List.length} possible pairs`);
+  
+  // ✅ Generate all combinations
+  let generatedCount = 0;
   fut1List.forEach(f1 => {
     fut2List.forEach(f2 => {
-      const fut1Price = this.getFuturePrice(ex, f1 === 'perpetual' ? null : f1);
-      const fut2Price = this.getFuturePrice(ex, f2);
+      // Skip if same expiry (optional - remove if you want perpetual vs perpetual)
+      if (f1 === f2 && f1 === 'perpetual') {
+        return;
+      }
+      
+      const fut1Price = this.getFuturePrice(ex, f1 === 'perpetual' ? null : f1, symbol);
+      const fut2Price = this.getFuturePrice(ex, f2, symbol);
       
       if (fut1Price.bid && fut1Price.ask && fut2Price.bid && fut2Price.ask) {
         const fs = fut2Price.bid - fut1Price.ask;
@@ -386,13 +438,25 @@ getAllFutureExpiries(exchange) {
           fs: fs.toFixed(2),
           rs: rs.toFixed(2)
         });
+        generatedCount++;
+      } else {
+        console.log(`⚠️ Missing price data for pair: ${f1} x ${f2}`);
       }
     });
   });
   
-  // Apply portfolio limit
+  console.log(`✅ Generated ${generatedCount} valid pairs out of ${fut1List.length * fut2List.length} combinations`);
+  
+  // ✅ Apply portfolio limit
   const limit = parseInt(noPrtFolio) || 10;
-  return results.slice(0, limit);
+  
+  if (results.length > limit) {
+    console.log(`📊 Limiting from ${results.length} to ${limit} rows`);
+    return results.slice(0, limit);
+  }
+  
+  console.log(`📊 Returning ${results.length} rows (no limit applied)`);
+  return results;
 }
 
   sortExpiriesByDate(expiries, exchange) {
@@ -438,14 +502,15 @@ getAllFutureExpiries(exchange) {
       return null;
     }
     
-    const { strategy, strikeInterval, noPrtFolio } = config;
-    const spotPrice = this.getSpotPrice(config.exchange);
-    const nearestStrike = Math.round(spotPrice / (strikeInterval || 1000)) * (strikeInterval || 1000);
+    const { strategy, strikeInterval, noPrtFolio, symbol = 'BTC' } = config;
+    const spotPrice = this.getSpotPrice(config.exchange, symbol);
+    const interval = parseInt(strikeInterval) || (symbol === 'ETH' ? 50 : 1000);
+    const nearestStrike = Math.round(spotPrice / interval) * interval;
     
     const strikes = [];
     const portfolioCount = parseInt(noPrtFolio) || 10;
     for (let i = -portfolioCount; i <= portfolioCount; i++) {
-      strikes.push(nearestStrike + (i * (strikeInterval || 1000)));
+      strikes.push(nearestStrike + (i * interval));
     }
     
     const strategyLower = strategy.toLowerCase();
@@ -518,13 +583,14 @@ getAllFutureExpiries(exchange) {
   }
 
   calculateRatio(config, strikes) {
-    const { exchange, optionExpiry, gap, ratio1, ratio2 } = config;
+    const { exchange, optionExpiry, gap, ratio1, ratio2, symbol = 'BTC' } = config;
     const ex = exchange.toLowerCase();
-    const gapNum = parseInt(gap) || 1000;
+    const gapNum = parseInt(gap) || (symbol === 'ETH' ? 50 : 1000);
     const r1 = parseInt(ratio1) || 1;
     const r2 = parseInt(ratio2) || 2;
-    const spotPrice = this.getSpotPrice(ex);
-    const nearestStrike = Math.round(spotPrice / 1000) * 1000;
+    const spotPrice = this.getSpotPrice(ex, symbol);
+    const strikeInterval = parseInt(config.strikeInterval) || (symbol === 'ETH' ? 50 : 1000);
+    const nearestStrike = Math.round(spotPrice / strikeInterval) * strikeInterval;
     
     const input1 = 1.0;
     const input2 = r2 / r1;
@@ -537,8 +603,8 @@ getAllFutureExpiries(exchange) {
         if (!strikes.includes(l2)) return;
         
         const optType = type === 'CE' ? 'C' : 'P';
-        const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType);
-        const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType);
+        const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType, symbol);
+        const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType, symbol);
         
         if (!q1 || !q2) return;
         
@@ -566,11 +632,12 @@ getAllFutureExpiries(exchange) {
   }
 
   calculatePulseButterfly(config, strikes) {
-    const { exchange, optionExpiry, gap, strategyLegType } = config;
+    const { exchange, optionExpiry, gap, strategyLegType, symbol = 'BTC' } = config;
     const ex = exchange.toLowerCase();
-    const gapNum = parseInt(gap) || 1000;
-    const spotPrice = this.getSpotPrice(ex);
-    const nearestStrike = Math.round(spotPrice / 1000) * 1000;
+    const gapNum = parseInt(gap) || (symbol === 'ETH' ? 50 : 1000);
+    const spotPrice = this.getSpotPrice(ex, symbol);
+    const strikeInterval = parseInt(config.strikeInterval) || (symbol === 'ETH' ? 50 : 1000);
+    const nearestStrike = Math.round(spotPrice / strikeInterval) * strikeInterval;
     
     const results = [];
     
@@ -591,10 +658,10 @@ getAllFutureExpiries(exchange) {
         if (![l1, l3, l4].every(s => strikes.includes(s))) return;
         
         const optType = type === 'CE' ? 'C' : 'P';
-        const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType);
-        const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType);
-        const q3 = this.getOptionQuote(ex, optionExpiry, l3, optType);
-        const q4 = this.getOptionQuote(ex, optionExpiry, l4, optType);
+        const q1 = this.getOptionQuote(ex, optionExpiry, l1, optType, symbol);
+        const q2 = this.getOptionQuote(ex, optionExpiry, l2, optType, symbol);
+        const q3 = this.getOptionQuote(ex, optionExpiry, l3, optType, symbol);
+        const q4 = this.getOptionQuote(ex, optionExpiry, l4, optType, symbol);
         
         if (!q1 || !q2 || !q3 || !q4) return;
         

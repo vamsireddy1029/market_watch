@@ -107,7 +107,7 @@ const Dashboard = () => {
       return;
     }
     
-    const defaultGap = newSymbol === 'ETH' ? 100 : 1000;
+    const defaultGap = newSymbol === 'ETH' ? 50 : 1000;
     const newConfig = {
       symbol: newSymbol,
       instrumentType: 'future',
@@ -137,29 +137,16 @@ const Dashboard = () => {
         return;
       }
 
-      if (baseExchange === 'okx') {
-        const response = await fetch('http://localhost:8080/api/fetch-metadata', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            exchange: 'okx',
-            instrumentType: config[exchangeId]?.instrumentType || 'swap',
-            symbol: symbol || config[exchangeId]?.symbol || 'BTC'
-          })
-        });
+      // ✅ FIX: Proper handling for all exchanges
+      const body = { 
+        exchange: baseExchange, 
+        instrumentType: 'all'
+      };
 
-        const result = await response.json();
-        
-        if (result.success) {
-          setAvailableData(prev => ({ ...prev, [exchangeId]: result.metadata }));
-          showNotification(`OKX metadata: ${result.metadata.total} instruments`, 'success');
-        }
-        setIsLoading(false);
-        return;
-      }
       
-      const body = { exchange: baseExchange, instrumentType: 'option' };
       if (baseExchange === 'deribit') {
+        body.symbol = symbol || config[exchangeId]?.symbol || 'BTC';
+      } else if (baseExchange === 'okx') {
         body.symbol = symbol || config[exchangeId]?.symbol || 'BTC';
       }
       
@@ -175,7 +162,19 @@ const Dashboard = () => {
       
       if (result.success) {
         setAvailableData(prev => ({ ...prev, [exchangeId]: result.metadata }));
-        showNotification(`${exchangeId} metadata loaded`, 'success');
+        
+        const futCount = result.metadata.instruments?.futures?.length || 0;
+        const optCount = result.metadata.instruments?.options?.length || 0;
+        const perpCount = result.metadata.instruments?.perpetual?.length || 0;
+        
+        let message = `${baseExchange.toUpperCase()}: `;
+        if (perpCount > 0) message += `${perpCount} perpetual, `;
+        if (futCount > 0) message += `${futCount} futures, `;
+        if (optCount > 0) message += `${optCount} options`;
+        
+        showNotification(message, 'success');
+      } else {
+        showNotification(`Failed to fetch ${exchangeId} metadata: ${result.error || 'Unknown error'}`);
       }
     } catch (error) {
       showNotification(`Failed to fetch ${exchangeId} metadata: ${error.message}`);
@@ -205,8 +204,8 @@ const Dashboard = () => {
         
         const defaultConfig = {
           deribit: { symbol: 'BTC', instrumentType: 'future', expiry: '', startStrike: '', gap: 1000, entryCount: 5 },
-          binance: { instrumentType: 'option', expiry: '', startStrike: '', gap: 1000, entryCount: 5 },
-          bybit: { instrumentType: 'option', expiry: '', startStrike: '', gap: 1000, entryCount: 5 },
+          binance: { symbol: 'BTC', instrumentType: 'future', expiry: '', startStrike: '', gap: 1000, entryCount: 5 },
+          bybit: {symbol: 'BTC', instrumentType: 'future', expiry: '', startStrike: '', gap: 1000, entryCount: 5 },
           lighter: { instrumentType: 'perpetual' },
           okx: { instrumentType: 'swap', symbol: 'BTC', expiry: '', startStrike: '', gap: 1000, entryCount: 5 }
         };
@@ -219,19 +218,33 @@ const Dashboard = () => {
   };
 
   const handleConfigChange = (exchange, field, value) => {
-    setConfig(prev => ({
-      ...prev,
-      [exchange]: { ...prev[exchange], [field]: value }
-    }));
-    
-    if ((exchange.startsWith('deribit') || exchange === 'okx') && field === 'symbol') {
+  setConfig(prev => ({
+    ...prev,
+    [exchange]: { ...prev[exchange], [field]: value }
+  }));
+  
+  const baseExchange = exchange.split('_')[0];
+  const currentConfig = config[exchange] || {};
+  
+  // ✅ Auto-fetch metadata when key fields change
+  if (field === 'symbol') {
+    // Symbol changed - re-fetch metadata
+    if (baseExchange === 'deribit' || baseExchange === 'okx') {
       setTimeout(() => fetchMetadata(exchange, value), 100);
     }
-    
-    if (exchange === 'okx' && field === 'instrumentType') {
-      setTimeout(() => fetchMetadata(exchange, config[exchange]?.symbol), 100);
+  } else if (field === 'strategy') {
+    // Strategy changed - check if we need to fetch expiries
+    const hasSymbol = currentConfig.symbol || (baseExchange !== 'deribit' && baseExchange !== 'okx');
+    if (hasSymbol && !availableData[exchange]) {
+      setTimeout(() => fetchMetadata(exchange, currentConfig.symbol), 100);
     }
-  };
+  } else if (field === 'instrumentType') {
+    // Instrument type changed for OKX
+    if (baseExchange === 'okx') {
+      setTimeout(() => fetchMetadata(exchange, currentConfig.symbol), 100);
+    }
+  }
+};
 
   const handleSubmit = async (specificExchange = null) => {
     const exchangesToSubmit = specificExchange ? [specificExchange] : selectedExchanges;
@@ -350,14 +363,20 @@ const Dashboard = () => {
   const isSpotReferenceRow = (exchangeId, row, appliedSymbol) => {
     const ex = exchangeId.split('_')[0].toLowerCase();
     const inst = (row?.instrument || '').toUpperCase();
+    const symbol = appliedSymbol || 'BTC';
     
     if (ex === 'deribit') {
-      return inst === `${appliedSymbol}-PERPETUAL`;
+      return inst === `${symbol}-PERPETUAL`;
     }
     
-    if (ex === 'binance' || ex === 'bybit') {
+    if (ex === 'binance') {
       const rowType = (row?.type || '').toLowerCase();
       return ((rowType === 'spot' || rowType === 'future') && inst === 'BTCUSDT');
+    }
+    
+    if (ex === 'bybit') {
+      const rowType = (row?.type || '').toLowerCase();
+      return (rowType === 'future' && inst === 'BTCUSDT');
     }
     
     if (ex === 'lighter') {
@@ -366,7 +385,7 @@ const Dashboard = () => {
 
     if (ex === 'okx') {
       const rowType = (row?.type || '').toLowerCase();
-     return rowType === 'swap' && inst.includes(`${appliedSymbol}-USDT-SWAP`);
+      return rowType === 'swap' && inst.includes(`${symbol}-USDT-SWAP`);
     }
     
     return false;
@@ -377,28 +396,20 @@ const Dashboard = () => {
     const instrument = row?.instrument || '';
     const upperInstrument = instrument.toUpperCase();
     
-    // Determine matching exchange for this data key
     const keyParts = key.split('_');
     let matchingExchange = null;
     
-    // Match exchange instance based on key format
-    if (keyParts[0] === 'deribit' && keyParts.length >= 2) {
-      // deribit_btc_INSTRUMENT or deribit_eth_INSTRUMENT
+    if (keyParts[0] === 'deribit' && keyParts.length >= 3) {
       matchingExchange = `${keyParts[0]}_${keyParts[1]}`;
-    } else if (keyParts[0] === 'okx') {
-      // okx_btc-usdt-swap or similar - need to extract symbol
-      const symbolMatch = instrument.match(/^([A-Z]+)-/i);
-      const symbol = symbolMatch ? symbolMatch[1].toLowerCase() : 'btc';
-      matchingExchange = `okx_${symbol}`;
+    } else if (keyParts[0] === 'okx' && keyParts.length >= 3) {
+      matchingExchange = `${keyParts[0]}_${keyParts[1]}`;
     } else if (keyParts[0] === 'lighter') {
       matchingExchange = 'lighter';
     } else {
       matchingExchange = keyParts[0];
     }
     
-    // Check if this exchange instance is in appliedConfig
     if (!matchingExchange || !appliedConfig[matchingExchange]) {
-      console.log(`⚠️ No config for key: ${key}, matched: ${matchingExchange}`);
       return filtered;
     }
     
@@ -406,40 +417,144 @@ const Dashboard = () => {
     const appliedSymbol = (applied.symbol || 'BTC').toUpperCase();
     const baseExchange = matchingExchange.split('_')[0];
     
-    // Always include spot/perpetual reference row
     if (isSpotReferenceRow(matchingExchange, row, appliedSymbol)) {
       filtered[key] = row;
       return filtered;
     }
 
-    // Lighter - show all perpetuals
     if (baseExchange === 'lighter') {
       filtered[key] = row;
       return filtered;
     }
 
-    // OKX - handle all instrument types
-    if (baseExchange === 'okx') {
+    let include = false;
+    const type = applied.instrumentType;
+    
+    if (baseExchange === 'deribit') {
+      if (type === 'future') {
+        const parts = upperInstrument.split('-');
+        include = parts.length === 2 && 
+                  parts[0] === appliedSymbol && 
+                  !upperInstrument.includes('PERPETUAL');
+        
+        if (include && applied.expiry && applied.expiry.trim()) {
+          const expiryNorm = applied.expiry.trim().toUpperCase().replace(/^0+/, '');
+          include = upperInstrument.includes(`-${expiryNorm}`);
+        }
+      } 
+      else if (type === 'option') {
+        const isOption = /^[A-Z]{3}-\d{1,2}[A-Z]{3}\d{2}-\d{4,6}-[CP]$/i.test(upperInstrument);
+        
+        if (isOption && upperInstrument.startsWith(`${appliedSymbol}-`)) {
+          include = true;
+
+          if (applied.expiry && applied.expiry.trim()) {
+            const expiryNorm = applied.expiry.trim().toUpperCase().replace(/^0+/, '');
+            include = upperInstrument.includes(`-${expiryNorm}-`);
+          }
+
+          if (include && applied.startStrike && applied.startStrike.trim()) {
+            const start = parseInt(applied.startStrike);
+            const gap = parseInt(applied.gap || 1000);
+            const count = parseInt(applied.entryCount || 5);
+            const parts = upperInstrument.split('-');
+            const strike = parseInt(parts[2]);
+
+            if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
+              const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
+              include = validStrikes.includes(strike);
+            }
+          }
+        }
+      }
+    }
+    
+    else if (baseExchange === 'binance') {
+      if (type === 'future') {
+        include = upperInstrument === 'BTCUSDT' || 
+                  /^BTCUSDT[_-]\d{6}$/i.test(upperInstrument);
+      } 
+      else if (type === 'option') {
+        // Binance options format: BTC-251018-100000-C or similar
+        const isOption = /^BTC-\d{6}-\d{4,6}-[CP]$/i.test(upperInstrument);
+        
+        if (isOption) {
+          include = true;
+
+          // Filter by expiry if specified
+          if (applied.expiry && applied.expiry.trim()) {
+            const expiryNorm = applied.expiry.trim();
+            include = upperInstrument.includes(`-${expiryNorm}-`);
+          }
+
+          // Filter by strike range if specified
+          if (include && applied.startStrike && applied.startStrike.trim()) {
+            const start = parseInt(applied.startStrike);
+            const gap = parseInt(applied.gap || 1000);
+            const count = parseInt(applied.entryCount || 5);
+            const parts = upperInstrument.split('-');
+            const strike = parseInt(parts[2]);
+
+            if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
+              const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
+              include = validStrikes.includes(strike);
+            }
+          }
+        }
+      }
+      else if (type === 'spot') {
+        include = upperInstrument === 'BTCUSDT' && (row?.type || '').toLowerCase() === 'spot';
+      }
+    }
+    
+    else if (baseExchange === 'bybit') {
+      if (type === 'future') {
+        include = upperInstrument === 'BTCUSDT' || 
+                  /^BTC-\d{1,2}[A-Z]{3}\d{2}$/i.test(upperInstrument);
+      } 
+      else if (type === 'option') {
+        const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2}-\d{3,6}-[CP]$/i.test(upperInstrument);
+        
+        if (isOption) {
+          include = true;
+
+          if (applied.expiry && applied.expiry.trim()) {
+            let expiryNorm = applied.expiry.trim().toUpperCase();
+            if (/^\d{1,2}[A-Z]{3}\d{2}$/i.test(expiryNorm)) {
+              include = upperInstrument.includes(`-${expiryNorm}-`);
+            }
+          }
+
+          if (include && applied.startStrike && applied.startStrike.trim()) {
+            const start = parseInt(applied.startStrike);
+            const gap = parseInt(applied.gap || 1000);
+            const count = parseInt(applied.entryCount || 5);
+            const parts = upperInstrument.split('-');
+            const strike = parseInt(parts[2]);
+
+            if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
+              const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
+              include = validStrikes.includes(strike);
+            }
+          }
+        }
+      }
+    }
+    
+    else if (baseExchange === 'okx') {
       const rowType = (row?.type || '').toLowerCase();
-      const type = applied.instrumentType;
 
       if (type === 'swap' && rowType === 'swap') {
-        filtered[key] = row;
-        return filtered;
+        include = true;
       }
-      
-      if (type === 'futures' && rowType === 'futures') {
-        filtered[key] = row;
-        return filtered;
+      else if (type === 'futures' && rowType === 'futures') {
+        include = true;
       }
-      
-      if (type === 'spot' && rowType === 'spot') {
-        filtered[key] = row;
-        return filtered;
+      else if (type === 'spot' && rowType === 'spot') {
+        include = true;
       }
-
-      if (type === 'option' && rowType === 'option') {
-        let include = true;
+      else if (type === 'option' && rowType === 'option') {
+        include = true;
 
         if (applied.expiry && applied.expiry.trim()) {
           const expiryNorm = applied.expiry.trim().toUpperCase();
@@ -450,7 +565,6 @@ const Dashboard = () => {
           const start = parseInt(applied.startStrike);
           const gap = parseInt(applied.gap || 1000);
           const count = parseInt(applied.entryCount || 5);
-
           const parts = upperInstrument.split('-');
           const strikePart = parts.length >= 4 ? parts[3] : null;
           const strike = parseInt(strikePart);
@@ -460,144 +574,6 @@ const Dashboard = () => {
             include = validStrikes.includes(strike);
           }
         }
-
-        if (include) {
-          filtered[key] = row;
-        }
-        return filtered;
-      }
-
-      return filtered;
-    }
-
-    let include = false;
-    const type = applied.instrumentType;
-    
-    // OPTION FILTERING
-    if (type === 'option') {
-      if (baseExchange === 'deribit') {
-        const isOption = /^BTC-\d{2}[A-Z]{3}\d{2}-\d{4,6}-[CP]$/i.test(upperInstrument);
-        
-        if (isOption && upperInstrument.startsWith(`${appliedSymbol}-`)) {
-          include = true;
-
-          if (applied.expiry && applied.expiry.trim()) {
-            const expiryNorm = applied.expiry.trim().toUpperCase();
-            const expiryPattern = expiryNorm.replace(/^0+/, '');
-            
-            const hasExpiry = upperInstrument.includes(`-${expiryNorm}-`) || 
-                             upperInstrument.includes(`-${expiryPattern}-`);
-            
-            include = hasExpiry;
-          }
-
-          if (include && applied.startStrike && applied.startStrike.trim()) {
-            const start = parseInt(applied.startStrike);
-            const gap = parseInt(applied.gap || 1000);
-            const count = parseInt(applied.entryCount || 5);
-
-            const parts = upperInstrument.split('-');
-            const strikePart = parts.length >= 3 ? parts[2] : null;
-            const strike = parseInt(strikePart);
-
-            if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
-              const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
-              include = validStrikes.includes(strike);
-            }
-          }
-        }
-      } 
-      else if (baseExchange === 'binance') {
-        const isOption = /^BTCUSDT-\d{6}-\d{3,6}-[CP]$/i.test(upperInstrument);
-        
-        if (isOption) {
-          include = true;
-
-          if (applied.expiry && applied.expiry.trim()) {
-            const expiryNorm = applied.expiry.trim().toUpperCase();
-            include = upperInstrument.includes(`-${expiryNorm}-`);
-          }
-
-          if (include && applied.startStrike && applied.startStrike.trim()) {
-            const start = parseInt(applied.startStrike);
-            const gap = parseInt(applied.gap || 1000);
-            const count = parseInt(applied.entryCount || 5);
-
-            const parts = upperInstrument.split('-');
-            const strike = parseInt(parts[2]);
-
-            if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
-              const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
-              include = validStrikes.includes(strike);
-            }
-          }
-        }
-      }
-      else if (baseExchange === 'bybit') {
-        const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2}-\d{3,6}-[CP]$/i.test(upperInstrument);
-        
-        if (isOption) {
-          include = true;
-
-          if (applied.expiry && applied.expiry.trim()) {
-            const expiryNorm = applied.expiry.trim().toUpperCase();
-            const expiryPattern = expiryNorm.replace(/^0+/, '');
-            
-            const hasExpiry = upperInstrument.includes(`-${expiryNorm}-`) || 
-                             upperInstrument.includes(`-${expiryPattern}-`);
-            
-            include = hasExpiry;
-          }
-
-          if (include && applied.startStrike && applied.startStrike.trim()) {
-            const start = parseInt(applied.startStrike);
-            const gap = parseInt(applied.gap || 1000);
-            const count = parseInt(applied.entryCount || 5);
-
-            const parts = upperInstrument.split('-');
-            const strike = parseInt(parts[2]);
-
-            if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
-              const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
-              include = validStrikes.includes(strike);
-            }
-          }
-        }
-      }
-    } 
-    // FUTURE FILTERING
-    else if (type === 'future') {
-      if (baseExchange === 'deribit') {
-        const parts = upperInstrument.split('-');
-        include = parts.length === 2 && 
-                  parts[0] === appliedSymbol && 
-                  !upperInstrument.includes('PERPETUAL');
-      } 
-      else if (baseExchange === 'binance') {
-        include = upperInstrument === 'BTCUSDT' || 
-                  /^BTCUSDT[_-]\d{2,6}[A-Z]{0,3}\d{0,2}$/i.test(upperInstrument);
-      } 
-      else if (baseExchange === 'bybit') {
-        include = upperInstrument === 'BTCUSDT' || 
-                  /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/i.test(upperInstrument);
-      }
-    } 
-    // SPOT FILTERING
-    else if (type === 'spot') {
-      if (baseExchange === 'deribit') {
-        include = false;
-      } else {
-        include = upperInstrument === 'BTCUSDT' && 
-                  (row?.type || '').toLowerCase() === 'spot';
-      }
-    }
-    // PERPETUAL/SWAP FILTERING
-    else if (type === 'perpetual' || type === 'swap') {
-      if (baseExchange === 'deribit') {
-        include = upperInstrument === `${appliedSymbol}-PERPETUAL`;
-      } else if (baseExchange === 'binance' || baseExchange === 'bybit') {
-        include = upperInstrument === 'BTCUSDT' && 
-                  (row?.type || '').toLowerCase() === 'future';
       }
     }
     

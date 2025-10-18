@@ -982,20 +982,22 @@ const handleAddCFFRow = async () => {
     }
   };
   useEffect(() => {
+  // Auto-adjust strike intervals when symbol changes
   if (modalForm.symbol === 'ETH') {
     setModalForm(prev => ({
       ...prev,
-      strikeInterval: prev.strikeInterval === '1000' ? '50' : prev.strikeInterval,
-      gap: prev.gap === '1000' ? '50' : prev.gap
+      strikeInterval: '50',  // ✅ Set to 50 for ETH
+      gap: '50'
     }));
   } else if (modalForm.symbol === 'BTC') {
     setModalForm(prev => ({
       ...prev,
-      strikeInterval: prev.strikeInterval === '50' ? '1000' : prev.strikeInterval,
-      gap: prev.gap === '50' ? '1000' : prev.gap
+      strikeInterval: '1000',  // ✅ Set to 1000 for BTC
+      gap: '1000'
     }));
   }
 }, [modalForm.symbol]);
+
   useEffect(() => {
     let reconnectTimer = null;
 
@@ -1074,10 +1076,17 @@ const handleAddCFFRow = async () => {
   const fetchBinanceInstruments = async (type = 'option') => {
   try {
     setIsLoadingExpiries(true);
+    const symbol = modalForm.symbol || 'BTC';
+    
     const response = await fetch('http://localhost:8080/api/fetch-metadata', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ exchange: 'binance', instrumentType: type })
+      body: JSON.stringify({ 
+        exchange: 'binance', 
+        instrumentType: type,
+        symbol: symbol,
+        strategy: modalForm.strategy 
+      })
     });
     
     const result = await response.json();
@@ -1087,13 +1096,12 @@ const handleAddCFFRow = async () => {
         ...prev,
         binance: {
           ...prev.binance,
-          ...result.metadata
+          optionExpiries: type === 'option' ? result.metadata.optionExpiries : prev.binance.optionExpiries,
+          futureExpiries: type === 'future' ? result.metadata.futureExpiries : prev.binance.futureExpiries
         }
       }));
       
-      console.log('✅ Binance metadata loaded:', result.metadata);
-      console.log('📊 Future expiries:', result.metadata.futureExpiries);
-      console.log('📊 Option expiries:', result.metadata.optionExpiries);
+      console.log(`✅ Binance ${symbol} ${type} metadata loaded:`, result.metadata);
       
       // Set default expiry based on type
       if (type === 'future' && result.metadata.futureExpiries && result.metadata.futureExpiries.length > 0) {
@@ -1109,7 +1117,7 @@ const handleAddCFFRow = async () => {
       }
     }
   } catch (error) {
-    console.error('Failed to fetch Deribit instruments:', error);
+    console.error('Failed to fetch Binance instruments:', error);
   } finally {
     setIsLoadingExpiries(false);
   }
@@ -1120,7 +1128,7 @@ const fetchBybitInstruments = async (type = 'option') => {
     const response = await fetch('http://localhost:8080/api/fetch-metadata', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ exchange: 'bybit', instrumentType: type })
+      body: JSON.stringify({ exchange: 'bybit', instrumentType: type, strategy: modalForm.strategy })
     });
     
     const result = await response.json();
@@ -1158,13 +1166,16 @@ const fetchBybitInstruments = async (type = 'option') => {
 const fetchDeribitInstruments = async (type = 'option') => {
   try {
     setIsLoadingExpiries(true);
+    const symbol = modalForm.symbol || 'BTC';
+    
     const response = await fetch('http://localhost:8080/api/fetch-metadata', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         exchange: 'deribit', 
         instrumentType: type,
-        symbol: modalForm.symbol || 'BTC'  // ✅ ADD THIS
+        symbol: symbol,
+        strategy: modalForm.strategy 
       })
     });
     
@@ -1175,15 +1186,13 @@ const fetchDeribitInstruments = async (type = 'option') => {
         ...prev,
         deribit: {
           ...prev.deribit,
-          ...result.metadata
+          optionExpiries: type === 'option' ? result.metadata.optionExpiries : prev.deribit.optionExpiries || [],
+          futureExpiries: type === 'future' ? result.metadata.futureExpiries : prev.deribit.futureExpiries || []
         }
       }));
       
-      console.log(`✅ Deribit ${modalForm.symbol} metadata loaded:`, result.metadata);
-      console.log('📊 Future expiries:', result.metadata.futureExpiries);
-      console.log('📊 Option expiries:', result.metadata.optionExpiries);
+      console.log(`✅ Deribit ${symbol} ${type} metadata loaded:`, result.metadata);
       
-      // Set default expiry based on type
       if (type === 'future' && result.metadata.futureExpiries && result.metadata.futureExpiries.length > 0) {
         setModalForm(prev => ({ 
           ...prev, 
@@ -1203,57 +1212,27 @@ const fetchDeribitInstruments = async (type = 'option') => {
   }
 };
 
-  // Add this useEffect after the existing useEffect around line 765
-// Fetch metadata when exchange or strategy changes
-useEffect(() => {
-  if (!modalForm.exchange || !showModal) return;
-  
-  const fetchMetadata = async () => {
-    const isCFF = modalForm.strategy === 'C-F/F';
-    const isJelly = modalForm.strategy === 'Jelly';
-    const isSynthetic = modalForm.strategy === 'Synthetic';
-    
-    if (modalForm.exchange === 'deribit') {
-      if (isJelly || isSynthetic) {
-        await fetchDeribitInstruments('option');
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await fetchDeribitInstruments('future');
-      } else if (isCFF) {
-        await fetchDeribitInstruments('future');
-      } else if (modalForm.strategy) {
-        await fetchDeribitInstruments('option');
-      }
-    } else if (modalForm.exchange === 'binance') {
-      // ... similar pattern
-    }
-  };
-  
-  fetchMetadata();
-}, [modalForm.exchange, modalForm.strategy, showModal]);
 
-// ✅ WITH THIS:
+// Replace the useEffect around line 960
 useEffect(() => {
   if (!modalForm.exchange || !showModal || !modalForm.strategy) return;
   
   const fetchMetadata = async () => {
-    const isCFF = modalForm.strategy === 'C-F/F';
     const isJelly = modalForm.strategy === 'Jelly';
     const isSynthetic = modalForm.strategy === 'Synthetic';
+    const isCFF = modalForm.strategy === 'C-F/F';
     
-    // ✅ For Deribit, symbol matters
+    // ✅ For Deribit
     if (modalForm.exchange === 'deribit') {
-      // Jelly & Synthetic need both options and futures
       if (isJelly || isSynthetic) {
+        // ✅ Fetch options first with strategy parameter
         await fetchDeribitInstruments('option');
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 1000)); // ✅ Increased wait
+        // ✅ Then fetch futures
         await fetchDeribitInstruments('future');
-      } 
-      // C-F/F only needs futures
-      else if (isCFF) {
+      } else if (isCFF) {
         await fetchDeribitInstruments('future');
-      } 
-      // Other strategies (Butterfly, Ratio, etc.) only need options
-      else {
+      } else {
         await fetchDeribitInstruments('option');
       }
     } 
@@ -1261,7 +1240,7 @@ useEffect(() => {
     else if (modalForm.exchange === 'binance') {
       if (isJelly || isSynthetic) {
         await fetchBinanceInstruments('option');
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 1000));
         await fetchBinanceInstruments('future');
       } else if (isCFF) {
         await fetchBinanceInstruments('future');
@@ -1273,7 +1252,7 @@ useEffect(() => {
     else if (modalForm.exchange === 'bybit') {
       if (isJelly || isSynthetic) {
         await fetchBybitInstruments('option');
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 1000));
         await fetchBybitInstruments('future');
       } else if (isCFF) {
         await fetchBybitInstruments('future');
@@ -1285,8 +1264,8 @@ useEffect(() => {
   
   fetchMetadata();
 }, [modalForm.exchange, modalForm.strategy, modalForm.symbol, showModal]);
-
-  const addTable = () => {
+  
+const addTable = () => {
     const newTable = {
       id: `table_${tableCounter}`,
       config: { 
@@ -1356,7 +1335,6 @@ useEffect(() => {
     
     setShowModal(true);
   };
-
 const applyStrategy = async () => {
   if (activeTableIndex === null) return;
   if (!modalForm.exchange || !modalForm.strategy) {
@@ -1380,18 +1358,18 @@ const applyStrategy = async () => {
     return;
   }
 
-  // ✅ NEW: Set futureExpiry based on strategy
+  // ✅ FIXED: Ensure symbol is always included in config
   let futureExpiry = modalForm.futureExpiry;
   if (modalForm.strategy === 'Synthetic') {
-    futureExpiry = modalForm.optionExpiry; // Use same expiry for Synthetic
+    futureExpiry = modalForm.optionExpiry;
   }
 
   const config = {
     exchange: modalForm.exchange,
     strategy: modalForm.strategy,
-    symbol: modalForm.symbol,
+    symbol: modalForm.symbol || 'BTC', // ✅ ENSURE SYMBOL IS ALWAYS SET
     optionExpiry: modalForm.optionExpiry,
-    futureExpiry: futureExpiry, // ✅ ADD THIS
+    futureExpiry: futureExpiry,
     fut1Expiry: modalForm.fut1Expiry || 'all',
     fut2Expiry: modalForm.fut2Expiry || 'all',
     strikeInterval: parseInt(modalForm.strikeInterval) || 1000,
@@ -1403,6 +1381,8 @@ const applyStrategy = async () => {
     strikeMode: modalForm.strikeMode || 'auto',
     nearestStrike: modalForm.nearestStrike ? parseInt(modalForm.nearestStrike) : ''
   };
+
+  console.log('📤 Sending config to backend:', config); // ✅ DEBUG LOG
 
   try {
     const tableId = tables[activeTableIndex].id;
@@ -1422,8 +1402,8 @@ const applyStrategy = async () => {
         
         newTables[activeTableIndex] = { 
           ...newTables[activeTableIndex], 
-          config, 
-          data: data,  // ✅ No sorting needed for C-F/F anymore
+          config, // ✅ SAVE THE COMPLETE CONFIG INCLUDING SYMBOL
+          data: data,
           liveData: result.data ? {
             ltp: parseFloat(result.data.spotPrice),
             timestamp: new Date().toLocaleTimeString()
@@ -1621,7 +1601,6 @@ const applyStrategy = async () => {
             color: '#6b7280',
             marginLeft: '4px'
           }}>
-            {table.config.optionExpiry && `${table.config.optionExpiry} (O)`}
             {table.config.futureExpiry && table.config.strategy === 'Jelly' && ` ${table.config.futureExpiry} (F)`}
           </span>
         )}
@@ -1744,7 +1723,28 @@ const applyStrategy = async () => {
   {modalForm.exchange === 'deribit' ? (
     <select 
       value={modalForm.symbol} 
-      onChange={(e) => setModalForm({...modalForm, symbol: e.target.value})}
+      onChange={(e) => {
+        const newSymbol = e.target.value;
+        setModalForm({
+          ...modalForm, 
+          symbol: newSymbol,
+          // Reset expiries when symbol changes
+          optionExpiry: '',
+          futureExpiry: '',
+          strikeInterval: newSymbol === 'ETH' ? '50' : '1000',
+          gap: newSymbol === 'ETH' ? '50' : '1000'
+        });
+        
+        // Clear existing expiries data
+        setAvailableData(prev => ({
+          ...prev,
+          deribit: {
+            ...prev.deribit,
+            optionExpiries: [],
+            futureExpiries: []
+          }
+        }));
+      }}
       style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
     >
       <option value="BTC">BTC</option>
@@ -1760,7 +1760,8 @@ const applyStrategy = async () => {
   )}
 </div>
 
-                {modalForm.strategy === 'Jelly' && (
+                
+{modalForm.strategy === 'Jelly' && (
   <>
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>Option Expiry</label>
@@ -1771,6 +1772,7 @@ const applyStrategy = async () => {
         style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
       >
         <option value="">{!modalForm.exchange ? 'Select exchange first' : (isLoadingExpiries ? 'Loading...' : '--Select--')}</option>
+        {/* ✅ FIXED: Use correct path for all exchanges */}
         {(availableData[modalForm.exchange]?.optionExpiries || []).map(exp => (
           <option key={exp} value={exp}>{exp}</option>
         ))}
@@ -1786,6 +1788,7 @@ const applyStrategy = async () => {
         style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
       >
         <option value="">{!modalForm.exchange ? 'Select exchange first' : (isLoadingExpiries ? 'Loading...' : '--Select--')}</option>
+        {/* ✅ FIXED: Use correct path for all exchanges */}
         {(availableData[modalForm.exchange]?.futureExpiries || []).map(exp => (
           <option key={exp} value={exp}>{exp}</option>
         ))}
@@ -1864,38 +1867,52 @@ const applyStrategy = async () => {
                   </div>
                 )}
 
-                {modalForm.strategy === 'C-F/F' && (
+                
+{modalForm.strategy === 'C-F/F' && (
   <>
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>
-        Fut1 Expiry
+    <div style={{ marginBottom: '12px' }}>
+      <label style={{ display: 'block', marginBottom: '4px', fontWeight: '500', fontSize: '13px' }}>
+        Fut1 Expiry:
       </label>
-      <select 
-        value={modalForm.fut1Expiry} 
-        onChange={(e) => setModalForm({ ...modalForm, fut1Expiry: e.target.value })} 
-        disabled={isLoadingExpiries || !modalForm.exchange}
-        style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+      <select
+        value={modalForm.fut1Expiry}
+        onChange={(e) => setModalForm({ ...modalForm, fut1Expiry: e.target.value })}
+        style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+        disabled={isLoadingExpiries}
       >
         <option value="all">All Expiries</option>
         <option value="perpetual">Perpetual</option>
-        {(availableData[modalForm.exchange]?.futureExpiries || []).map(exp => (
+        {modalForm.exchange === 'deribit' && availableData.deribit?.futureExpiries?.map(exp => (
+          <option key={exp} value={exp}>{exp}</option>
+        ))}
+        {modalForm.exchange === 'binance' && availableData.binance?.futureExpiries?.map(exp => (
+          <option key={exp} value={exp}>{exp}</option>
+        ))}
+        {modalForm.exchange === 'bybit' && availableData.bybit?.futureExpiries?.map(exp => (
           <option key={exp} value={exp}>{exp}</option>
         ))}
       </select>
     </div>
 
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <label style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '12px' }}>
-        Fut2 Expiry
+    <div style={{ marginBottom: '12px' }}>
+      <label style={{ display: 'block', marginBottom: '4px', fontWeight: '500', fontSize: '13px' }}>
+        Fut2 Expiry:
       </label>
-      <select 
-        value={modalForm.fut2Expiry} 
-        onChange={(e) => setModalForm({ ...modalForm, fut2Expiry: e.target.value })} 
-        disabled={isLoadingExpiries || !modalForm.exchange}
-        style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+      <select
+        value={modalForm.fut2Expiry}
+        onChange={(e) => setModalForm({ ...modalForm, fut2Expiry: e.target.value })}
+        style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', fontSize: '13px' }}
+        disabled={isLoadingExpiries}
       >
-        <option value="all">All Futures</option>
-        {(availableData[modalForm.exchange]?.futureExpiries || []).map(exp => (
+        <option value="all">All Expiries</option>
+        {/* ✅ REMOVED perpetual from Fut2 - it should only be in Fut1 */}
+        {modalForm.exchange === 'deribit' && availableData.deribit?.futureExpiries?.map(exp => (
+          <option key={exp} value={exp}>{exp}</option>
+        ))}
+        {modalForm.exchange === 'binance' && availableData.binance?.futureExpiries?.map(exp => (
+          <option key={exp} value={exp}>{exp}</option>
+        ))}
+        {modalForm.exchange === 'bybit' && availableData.bybit?.futureExpiries?.map(exp => (
           <option key={exp} value={exp}>{exp}</option>
         ))}
       </select>

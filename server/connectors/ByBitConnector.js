@@ -114,28 +114,32 @@ class BybitConnector {
 
       // ===== FETCH FUTURES =====
       if (instrumentType === 'future' || instrumentType === 'all') {
-        const futuresUrl = 'https://api.bybit.com/v5/market/instruments-info';
-        const futuresRes = await axios.get(futuresUrl, { params: { category: 'linear' } });
-        const futuresData = futuresRes.data?.result?.list || [];
+  const futuresUrl = 'https://api.bybit.com/v5/market/instruments-info';
+  const futuresRes = await axios.get(futuresUrl, { params: { category: 'linear' } });
+  const futuresData = futuresRes.data?.result?.list || [];
 
-        futuresData.forEach(sym => {
-          const symbol = sym.symbol || '';
-          if (!symbol || !symbol.startsWith('BTC')) return;
-          
-          if (sym.contractType === 'LinearPerpetual' && symbol === 'BTCUSDT') {
-            instrumentsObj.perpetual.push(symbol);
-          } else if (symbol.includes('-') && symbol !== 'BTCUSDT') {
-            const parts = symbol.split('-');
-            if (parts.length >= 2) {
-              const dateStr = parts[1];
-              futureExpiriesSet.add(dateStr);
-              instrumentsObj.futures.push(symbol);
-            }
-          }
-        });
-
-        console.log(`✅ Bybit futures: ${instrumentsObj.futures.length}, futureExpiries: ${futureExpiriesSet.size}`);
+  futuresData.forEach(sym => {
+    const symbol = sym.symbol || '';
+    if (!symbol || !symbol.startsWith('BTC')) return;
+    
+    // Perpetual
+    if (sym.contractType === 'LinearPerpetual' && symbol === 'BTCUSDT') {
+      instrumentsObj.perpetual.push(symbol);
+    } 
+    // Quarterly Futures: BTCUSDT-10OCT25 format
+    else if (symbol.includes('-') && symbol !== 'BTCUSDT') {
+      const parts = symbol.split('-');
+      if (parts.length >= 2) {
+        const dateStr = parts[1]; // e.g., "10OCT25"
+        futureExpiriesSet.add(dateStr);
+        instrumentsObj.futures.push(symbol);
       }
+    }
+  });
+
+  console.log(`✅ Bybit futures: ${instrumentsObj.futures.length}, futureExpiries: ${futureExpiriesSet.size}`);
+  console.log(`📊 Sample future expiries:`, Array.from(futureExpiriesSet).slice(0, 5));
+}
 
       // ===== FETCH OPTIONS =====
       if (instrumentType === 'option' || instrumentType === 'all') {
@@ -224,48 +228,66 @@ class BybitConnector {
         channels.push('tickers.BTCUSDT');
       } 
       else if (instrumentType === 'future' || (strategy && strategy.toLowerCase() === 'c-f/f')) {
-        console.log('🎯 Fetching Bybit futures...');
-        const res = await axios.get('https://api.bybit.com/v5/market/instruments-info', { params: { category: 'linear' } });
-        const allSymbols = res.data?.result?.list || [];
+  console.log('🎯 Fetching Bybit futures for C-F/F...');
+  const res = await axios.get('https://api.bybit.com/v5/market/instruments-info', { 
+    params: { category: 'linear' } 
+  });
+  const allSymbols = res.data?.result?.list || [];
 
-        const perpetual = allSymbols.find(s => s.symbol === 'BTCUSDT' && s.contractType === 'LinearPerpetual');
-        const quarterlyFutures = allSymbols.filter(s => 
-          s.symbol && 
-          s.symbol.startsWith('BTCUSDT-') && 
-          s.symbol !== 'BTCUSDT' &&
-          /^BTCUSDT-\d{2}[A-Z]{3}\d{2}$/.test(s.symbol)
-        );
+  const perpetual = allSymbols.find(s => 
+    s.symbol === 'BTCUSDT' && 
+    s.contractType === 'LinearPerpetual'
+  );
+  
+  const quarterlyFutures = allSymbols.filter(s => 
+    s.symbol && 
+    s.symbol.startsWith('BTCUSDT-') && 
+    s.symbol !== 'BTCUSDT' &&
+    /^BTCUSDT-\d{1,2}[A-Z]{3}\d{2}$/i.test(s.symbol)
+  );
 
-        console.log(`📊 Found ${quarterlyFutures.length} quarterly futures`);
+  console.log(`📊 Found ${quarterlyFutures.length} quarterly futures`);
+  console.log(`📊 Sample futures:`, quarterlyFutures.slice(0, 3).map(f => f.symbol));
 
-        const futuresList = [];
-        
-        // Always add perpetual
-        if (perpetual) {
-          futuresList.push(perpetual.symbol);
-        }
+  const futuresList = [];
+  
+  // ✅ Always add perpetual
+  if (perpetual) {
+    futuresList.push(perpetual.symbol);
+  }
 
-        const strategyLower = (strategy || '').toLowerCase();
-        if (strategyLower === 'c-f/f') {
-          futuresList.push(...quarterlyFutures.map(f => f.symbol));
-          console.log(`✅ Added ${quarterlyFutures.length} futures for C-F/F`);
-        }
-        else if (futureExpiry && futureExpiry.trim() !== '') {
-          const targetExpiry = futureExpiry.trim().toUpperCase();
-          const matched = quarterlyFutures.find(f => f.symbol.endsWith(`-${targetExpiry}`));
-          if (matched) {
-            futuresList.push(matched.symbol);
-            console.log(`✅ Added specific future: ${matched.symbol}`);
-          }
-        }
+  // ✅ CRITICAL FIX: Always subscribe to ALL futures for C-F/F
+  const strategyLower = (strategy || '').toLowerCase();
+  if (strategyLower === 'c-f/f') {
+    // ✅ For C-F/F, always add ALL futures regardless of expiry selection
+    futuresList.push(...quarterlyFutures.map(f => f.symbol));
+    console.log(`✅ C-F/F: Added ALL ${quarterlyFutures.length} futures`);
+  }
+  else if (futureExpiry && futureExpiry.trim() !== '' && futureExpiry.toLowerCase() !== 'all' && futureExpiry.toLowerCase() !== 'all expiries') {
+    // ✅ For other strategies with specific expiry
+    const targetExpiry = futureExpiry.trim().toUpperCase();
+    const matched = quarterlyFutures.find(f => f.symbol.endsWith(`-${targetExpiry}`));
+    if (matched) {
+      futuresList.push(matched.symbol);
+      console.log(`✅ Added specific future: ${matched.symbol}`);
+    } else {
+      console.warn(`⚠️ No future found for expiry: ${targetExpiry}`);
+      // Still add all for display
+      futuresList.push(...quarterlyFutures.map(f => f.symbol));
+    }
+  } else {
+    // ✅ No specific expiry - subscribe to ALL futures
+    futuresList.push(...quarterlyFutures.map(f => f.symbol));
+    console.log(`✅ Added ALL ${quarterlyFutures.length} futures (All Expiries mode)`);
+  }
 
-        console.log(`✅ Total futures to subscribe: ${futuresList.length}`);
-        this.startFuturesPricePolling(futuresList);
+  console.log(`✅ Total futures to subscribe: ${futuresList.length}`);
+  this.startFuturesPricePolling(futuresList);
 
-        futuresList.forEach(symbol => {
-          channels.push(`tickers.${symbol}`);
-        });
-      } 
+  futuresList.forEach(symbol => {
+    channels.push(`tickers.${symbol}`);
+  });
+}
       else if (instrumentType === 'option') {
         let allOptions = [];
         let cursor = '';
@@ -435,7 +457,8 @@ class BybitConnector {
                 mark_price: parseFloat(data.markPrice || data.lastPrice || 0).toFixed(2),
                 min_price: parseFloat(data.lowPrice24h || 0).toFixed(2),
                 max_price: parseFloat(data.highPrice24h || 0).toFixed(2),
-                volume: parseFloat(data.volume24h || 0).toFixed(2)
+                volume: parseFloat(data.volume24h || 0).toFixed(2),
+                timestamp: parseFloat(data.timestamp || Date.now())
               };
               
               const normalizedKey = `bybit_${symbol}`;
@@ -484,7 +507,8 @@ class BybitConnector {
       mark_price: parseFloat(newData.mark_price) > 0 ? newData.mark_price : lastData.mark_price,
       min_price: parseFloat(newData.min_price) > 0 ? newData.min_price : lastData.min_price,
       max_price: parseFloat(newData.max_price) > 0 ? newData.max_price : lastData.max_price,
-      volume: parseFloat(newData.volume) > 0 ? newData.volume : lastData.volume
+      volume: parseFloat(newData.volume) > 0 ? newData.volume : lastData.volume,
+      timestamp: parseFloat(newData.timestamp) > 0? newData.timestamp : lastData.timestamp,
     };
 
     this.lastKnownValues.set(key, mergedData);
@@ -564,9 +588,9 @@ class BybitConnector {
         mark_price: Number.isFinite(markPrice) ? markPrice.toFixed(2) : '0.00',
         min_price: Number.isFinite(lowPrice) ? lowPrice.toFixed(2) : '0.00',
         max_price: Number.isFinite(highPrice) ? highPrice.toFixed(2) : '0.00',
-        volume: Number.isFinite(volume) ? volume.toFixed(2) : '0.00'
+        volume: Number.isFinite(volume) ? volume.toFixed(2) : '0.00',
+        timestamp: Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now()
       };
-
       const normalizedKey = `bybit_${cleanSymbol}`;
       this.updateWithCaching(normalizedKey, converted);
 

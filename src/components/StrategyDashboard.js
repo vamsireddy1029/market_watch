@@ -636,10 +636,17 @@ const handleAddCFFRow = async () => {
   // ================================
   // C-F/F STRATEGY (GENERIC TABLE)
   // ================================
+ 
+  // ================================
+  // C-F/F STRATEGY (GENERIC TABLE)
+  // ================================
  if (isCFF) {
-    const headers = filteredData.length > 0 && !Object.keys(filteredData[0]).includes('exchange')
-      ? ['exchange', ...Object.keys(filteredData[0])]
-      : Object.keys(filteredData[0] || {});
+    // ✅ Filter out 'exchange' column from headers
+    const allHeaders = filteredData.length > 0 
+      ? Object.keys(filteredData[0] || {})
+      : [];
+    
+    const headers = allHeaders.filter(header => header !== 'exchange');
 
     // Sort data by fut1 and fut2 expiry dates
     const sortedData = [...filteredData].sort((a, b) => {
@@ -998,80 +1005,116 @@ const handleAddCFFRow = async () => {
   }
 }, [modalForm.symbol]);
 
-  useEffect(() => {
-    let reconnectTimer = null;
+  // StrategyDashboard.jsx - Replace WebSocket useEffect (around line 600)
 
-    const connect = () => {
-      try {
-        const ws = new WebSocket("ws://localhost:8080");
-        wsRef.current = ws;
+useEffect(() => {
+  let reconnectTimer = null;
+  let heartbeatInterval = null;
 
-        ws.onopen = () => {
-          setWsConnected(true);
-        };
+  const connect = () => {
+    try {
+      const ws = new WebSocket("ws://localhost:8080");
+      wsRef.current = ws;
 
-        ws.onmessage = (event) => {
-  try {
-    const message = JSON.parse(event.data);
-    
-    if (message.type === 'strategyUpdate' && message.data) {
-      setTables(prevTables => {
-        const updatedTables = [...prevTables];
+      ws.onopen = () => {
+        console.log('✅ WebSocket connected');
+        setWsConnected(true);
         
-        message.data.forEach(strategyData => {
-          const tableIndex = updatedTables.findIndex(t => t.id === strategyData.tableId);
-          if (tableIndex !== -1) {
-            const data = strategyData.data || [];
-            const table = updatedTables[tableIndex];
-            const isCFF = table.config.strategy === 'C-F/F';
-            const isCustomMode = table.config.selectedFutures !== undefined;
-            
-            // ✅ FIX: Only sort if in "All Expiries" mode, otherwise maintain order
-            const processedData = (isCFF && !isCustomMode) ? sortByExpiry(data) : data;
-            
-            updatedTables[tableIndex] = {
-              ...updatedTables[tableIndex],
-              data: processedData,
-              liveData: {
-                ltp: parseFloat(strategyData.spotPrice),
-                timestamp: new Date(strategyData.timestamp).toLocaleTimeString()
-              }
-            };
+        // ✅ NEW: Send heartbeat to keep connection alive
+        heartbeatInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
           }
-        });
-        
-        return updatedTables;
-      });
-    }
-  } catch (err) {
-    console.error("Failed to parse message:", err);
-  }
-};
+        }, 30000);
+      };
 
-        ws.onerror = (err) => {
-          console.error("WebSocket error", err);
-        };
-
-        ws.onclose = () => {
-          setWsConnected(false);
-          reconnectTimer = setTimeout(connect, 2000);
-        };
-      } catch (err) {
-        reconnectTimer = setTimeout(connect, 2000);
-      }
-    };
-
-    connect();
-
-    return () => {
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      try {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.close();
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          
+          // ✅ Ignore pong messages
+          if (message.type === 'pong') return;
+          
+          if (message.type === 'strategyUpdate' && message.data) {
+            console.log('📊 Strategy update received:', message.data.length, 'tables');
+            
+            setTables(prevTables => {
+              // ✅ CRITICAL: Create a completely new array to force re-render
+              const updatedTables = prevTables.map(table => ({ ...table }));
+              
+              message.data.forEach(strategyData => {
+                const tableIndex = updatedTables.findIndex(t => t.id === strategyData.tableId);
+                if (tableIndex !== -1) {
+                  const data = strategyData.data || [];
+                  const table = updatedTables[tableIndex];
+                  const isCFF = table.config.strategy === 'C-F/F';
+                  const isCustomMode = table.config.selectedFutures !== undefined;
+                  
+                  // ✅ Only sort if in "All Expiries" mode
+                  const processedData = (isCFF && !isCustomMode) ? sortByExpiry(data) : data;
+                  
+                  // ✅ CRITICAL: Create new object to trigger re-render
+                  updatedTables[tableIndex] = {
+                    ...updatedTables[tableIndex],
+                    data: processedData,
+                    liveData: {
+                      ltp: parseFloat(strategyData.spotPrice),
+                      timestamp: new Date(strategyData.timestamp).toLocaleTimeString()
+                    },
+                    // ✅ Add update timestamp to force re-render
+                    lastUpdate: Date.now()
+                  };
+                  
+                  console.log(`✅ Updated table ${strategyData.tableId} with ${processedData.length} rows`);
+                }
+              });
+              
+              return updatedTables;
+            });
+          }
+        } catch (err) {
+          console.error("Failed to parse message:", err);
         }
-      } catch {}
-    };
-  }, []);
+      };
+
+      ws.onerror = (err) => {
+        console.error("WebSocket error", err);
+        setWsConnected(false);
+      };
+
+      ws.onclose = () => {
+        console.log('❌ WebSocket closed, reconnecting...');
+        setWsConnected(false);
+        
+        if (heartbeatInterval) {
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = null;
+        }
+        
+        reconnectTimer = setTimeout(connect, 2000);
+      };
+    } catch (err) {
+      console.error('WebSocket connection error:', err);
+      reconnectTimer = setTimeout(connect, 2000);
+    }
+  };
+
+  connect();
+
+  // ✅ Cleanup on unmount
+  return () => {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    
+    try {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.close();
+      }
+    } catch (e) {
+      console.error('Error closing WebSocket:', e);
+    }
+  };
+}, []); 
 
   const fetchBinanceInstruments = async (type = 'option') => {
   try {

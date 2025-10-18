@@ -379,14 +379,20 @@ class DeribitConnector {
           this.spotPrice = mid;
         }
       }
-      
+       const parts = instrument.split("-");
+      const isOption = parts.length === 4
+      const priceFactor = isOption ? (data.underlying_price || 1) : 1;
+
       // Format and send market data
       const marketData = {
         instrument: instrument,
-        best_bid_price: data.best_bid_price,
-        best_ask_price: data.best_ask_price,
-        mark_price: data.mark_price,
-        last_price: data.last_price,
+        last_price: (data.last_price * priceFactor).toFixed(2),
+        best_bid_price: (data.best_bid_price * priceFactor).toFixed(2),
+        best_ask_price: (data.best_ask_price * priceFactor).toFixed(2),
+        mark_price: (data.mark_price * priceFactor).toFixed(2),
+        min_price: (data.min_price * priceFactor).toFixed(2),
+        max_price: (data.max_price * priceFactor).toFixed(2),
+        volume: data.stats?.volume || 0,
         timestamp: data.timestamp
       };
       

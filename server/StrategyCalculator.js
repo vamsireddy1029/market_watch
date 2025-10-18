@@ -335,7 +335,9 @@ class StrategyCalculator {
     return results;
   }
 
-  calculateCashFuture(config) {
+  // StrategyCalculator.js - Replace calculateCashFuture() method (around line 180)
+
+calculateCashFuture(config) {
   const { exchange, fut1Expiry, fut2Expiry, noPrtFolio, selectedFutures, symbol = 'BTC' } = config;
   const ex = exchange.toLowerCase();
   
@@ -369,21 +371,22 @@ class StrategyCalculator {
     return results;
   }
   
-  // ✅ ALL EXPIRIES MODE: Generate all combinations
+  // ✅ ALL EXPIRIES MODE: Generate combinations
   console.log('📋 C-F/F All Expiries Mode');
   console.log(`📊 Config: fut1Expiry="${fut1Expiry}", fut2Expiry="${fut2Expiry}", symbol="${symbol}"`);
   
   const fut1List = [];
   const fut2List = [];
   
-  // ✅ Handle Fut1 selection
-  if (!fut1Expiry || fut1Expiry === '' || fut1Expiry === 'all' || fut1Expiry.toLowerCase() === 'all expiries') {
+  // ✅ CRITICAL FIX: Handle Fut1 selection properly
+  const fut1Lower = (fut1Expiry || '').toLowerCase();
+  
+  if (!fut1Expiry || fut1Lower === '' || fut1Lower === 'all' || fut1Lower === 'all expiries') {
     console.log('🔄 Fut1: Adding perpetual + all expiries');
     fut1List.push('perpetual');
     const allExpiries = this.getAllFutureExpiries(exchange, symbol);
     fut1List.push(...allExpiries);
-    console.log(`📊 Fut1 list: ${fut1List.length} items -`, fut1List);
-  } else if (fut1Expiry.toLowerCase() === 'perpetual') {
+  } else if (fut1Lower === 'perpetual') {
     console.log('🔄 Fut1: Perpetual only');
     fut1List.push('perpetual');
   } else {
@@ -391,16 +394,29 @@ class StrategyCalculator {
     fut1List.push(fut1Expiry);
   }
   
-  // ✅ Handle Fut2 selection
-  if (!fut2Expiry || fut2Expiry === '' || fut2Expiry === 'all' || fut2Expiry.toLowerCase() === 'all expiries') {
-    console.log('🔄 Fut2: Adding all expiries (no perpetual)');
+  // ✅ CRITICAL FIX: Handle Fut2 selection properly
+  const fut2Lower = (fut2Expiry || '').toLowerCase();
+  
+  if (!fut2Expiry || fut2Lower === '' || fut2Lower === 'all' || fut2Lower === 'all expiries') {
+    console.log('🔄 Fut2: Adding all expiries (including perpetual for Binance)');
     const allExpiries = this.getAllFutureExpiries(exchange, symbol);
+    
+    // ✅ For Binance, add perpetual to Fut2 if not already in Fut1
+    if (ex === 'binance' && !fut1List.includes('perpetual')) {
+      fut2List.push('perpetual');
+    }
+    
     fut2List.push(...allExpiries);
-    console.log(`📊 Fut2 list: ${fut2List.length} items -`, fut2List);
+  } else if (fut2Lower === 'perpetual') {
+    console.log('🔄 Fut2: Perpetual only');
+    fut2List.push('perpetual');
   } else {
     console.log(`🔄 Fut2: Specific expiry - ${fut2Expiry}`);
     fut2List.push(fut2Expiry);
   }
+  
+  console.log(`📊 Fut1 list (${fut1List.length}):`, fut1List);
+  console.log(`📊 Fut2 list (${fut2List.length}):`, fut2List);
   
   // ✅ Validate we have futures to process
   if (fut1List.length === 0) {
@@ -419,15 +435,17 @@ class StrategyCalculator {
   let generatedCount = 0;
   fut1List.forEach(f1 => {
     fut2List.forEach(f2 => {
-      // Skip if same expiry (optional - remove if you want perpetual vs perpetual)
-      if (f1 === f2 && f1 === 'perpetual') {
+      // ✅ Skip if same expiry
+      if (f1 === f2) {
+        console.log(`⏭️ Skipping same expiry pair: ${f1} x ${f2}`);
         return;
       }
       
       const fut1Price = this.getFuturePrice(ex, f1 === 'perpetual' ? null : f1, symbol);
-      const fut2Price = this.getFuturePrice(ex, f2, symbol);
+      const fut2Price = this.getFuturePrice(ex, f2 === 'perpetual' ? null : f2, symbol);
       
-      if (fut1Price.bid && fut1Price.ask && fut2Price.bid && fut2Price.ask) {
+      if (fut1Price.bid && fut1Price.ask && fut2Price.bid && fut2Price.ask &&
+          fut1Price.bid > 0 && fut2Price.bid > 0) {
         const fs = fut2Price.bid - fut1Price.ask;
         const rs = fut1Price.bid - fut2Price.ask;
         
@@ -440,7 +458,7 @@ class StrategyCalculator {
         });
         generatedCount++;
       } else {
-        console.log(`⚠️ Missing price data for pair: ${f1} x ${f2}`);
+        console.log(`⚠️ Missing/invalid price for: ${f1} x ${f2}`);
       }
     });
   });

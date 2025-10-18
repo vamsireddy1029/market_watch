@@ -261,50 +261,71 @@ class BinanceConnector {
       streams = ['btcusdt@ticker'];
       
     } else if (instrumentType === 'future') {
-      console.log('🎯 Fetching Binance futures for C-F/F strategy...');
-      
-      const res = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo');
-      const allSymbols = res.data.symbols || [];
-      
-      const perpetual = allSymbols.find(s => 
-        s.status === 'TRADING' && 
-        s.symbol === 'BTCUSDT' && 
-        s.contractType === 'PERPETUAL'
-      );
-      
-      const quarterlyFutures = allSymbols.filter(s =>
-        s.status === 'TRADING' &&
-        s.symbol.startsWith('BTCUSDT_')
-      );
-      
-      let futuresList = [];
-      
-      if (perpetual) {
-        futuresList.push(perpetual.symbol);
-      }
-      
-      if (futureExpiry && futureExpiry.trim() !== '') {
-        const targetExpiry = futureExpiry.trim();
-        const matchedFuture = quarterlyFutures.find(f => 
-          f.symbol.endsWith(`_${targetExpiry}`)
-        );
-        
-        if (matchedFuture) {
-          futuresList.push(matchedFuture.symbol);
-          console.log(`✅ Added specific future: ${matchedFuture.symbol}`);
-        } else {
-          console.log(`⚠️ Future expiry ${targetExpiry} not found`);
-        }
-      } else {
-        futuresList.push(...quarterlyFutures.map(f => f.symbol));
-        console.log(`✅ Added ${quarterlyFutures.length} futures (All Expiries mode)`);
-      }
-
-      console.log(`✅ Total C-F/F futures: ${futuresList.length}`);
-
-      this.startFuturesPricePolling(futuresList);
-      streams = futuresList.map(symbol => `${symbol.toLowerCase()}@ticker`);
+  console.log('🎯 Fetching Binance futures for C-F/F strategy...');
+  
+  const res = await axios.get('https://fapi.binance.com/fapi/v1/exchangeInfo');
+  const allSymbols = res.data.symbols || [];
+  
+  const perpetual = allSymbols.find(s => 
+    s.status === 'TRADING' && 
+    s.symbol === 'BTCUSDT' && 
+    s.contractType === 'PERPETUAL'
+  );
+  
+  const quarterlyFutures = allSymbols.filter(s =>
+    s.status === 'TRADING' &&
+    s.symbol.startsWith('BTCUSDT_') &&
+    /^BTCUSDT_\d{6}$/.test(s.symbol)
+  );
+  
+  console.log(`📊 Found ${quarterlyFutures.length} quarterly futures`);
+  console.log(`📊 Sample futures:`, quarterlyFutures.slice(0, 3).map(f => f.symbol));
+  
+  let futuresList = [];
+  
+  // ✅ CRITICAL FIX: For C-F/F, always subscribe to ALL futures
+  const strategyLower = (strategy || '').toLowerCase();
+  if (strategyLower === 'c-f/f') {
+    // ✅ Add perpetual if exists
+    if (perpetual) {
+      futuresList.push(perpetual.symbol);
     }
+    
+    // ✅ Add ALL quarterly futures
+    futuresList.push(...quarterlyFutures.map(f => f.symbol));
+    console.log(`✅ C-F/F: Subscribed to ALL ${futuresList.length} futures (perpetual + quarterly)`);
+  }
+  else {
+    // ✅ For other strategies (Jelly, Synthetic)
+    if (perpetual) {
+      futuresList.push(perpetual.symbol);
+    }
+    
+    if (futureExpiry && futureExpiry.trim() !== '' && futureExpiry.toLowerCase() !== 'all') {
+      const targetExpiry = futureExpiry.trim();
+      const matchedFuture = quarterlyFutures.find(f => 
+        f.symbol.endsWith(`_${targetExpiry}`)
+      );
+      
+      if (matchedFuture) {
+        futuresList.push(matchedFuture.symbol);
+        console.log(`✅ Added specific future: ${matchedFuture.symbol}`);
+      } else {
+        console.log(`⚠️ Future expiry ${targetExpiry} not found, adding all`);
+        futuresList.push(...quarterlyFutures.map(f => f.symbol));
+      }
+    } else {
+      futuresList.push(...quarterlyFutures.map(f => f.symbol));
+      console.log(`✅ Added ${quarterlyFutures.length} futures (All Expiries mode)`);
+    }
+  }
+
+  console.log(`✅ Total futures to poll: ${futuresList.length}`);
+  console.log(`📊 Futures list:`, futuresList);
+
+  this.startFuturesPricePolling(futuresList);
+  streams = futuresList.map(symbol => `${symbol.toLowerCase()}@ticker`);
+}
     else if (instrumentType === 'option') {
       try {
         const res = await axios.get('https://eapi.binance.com/eapi/v1/exchangeInfo');
@@ -408,7 +429,7 @@ class BinanceConnector {
               mark_price: ((bestBid + bestAsk) / 2).toFixed(2),
               min_price: '0',
               max_price: '0',
-              volume: '0'
+              volume: '0',
             };
             
             const normalizedKey = `binance_${symbol.toLowerCase()}`;
@@ -453,9 +474,6 @@ class BinanceConnector {
   handleMessage(message, type) {
     // Skip subscription confirmations
     if (message.result === null || message.id) return;
-    
-    // ✅ CRITICAL FIX: Handle Binance options WebSocket format
-    // Options come in { stream: "...", data: {...} } format
     let actualData = message;
     if (message.stream && message.data) {
       actualData = message.data;
@@ -476,27 +494,29 @@ class BinanceConnector {
     
     // ✅ Parse different field names for options vs futures
     const lastPrice = parseFloat(
-      actualData.c || actualData.lastPrice || actualData.p || 0
+      actualData.c || 0
     );
     const bidPrice = parseFloat(
-      actualData.bo || actualData.b || actualData.bidPrice || 0
+      actualData.bo || 0
     );
     const askPrice = parseFloat(
-      actualData.ao || actualData.a || actualData.askPrice || 0
+      actualData.ao  || 0
     );
     const markPrice = parseFloat(
-      actualData.mp || actualData.markPrice || actualData.c || lastPrice || 0
+      actualData.mp  || 0
     );
     const lowPrice = parseFloat(
-      actualData.l || actualData.lowPrice || actualData.low || 0
+      actualData.l || 0
     );
     const highPrice = parseFloat(
-      actualData.h || actualData.highPrice || actualData.high || 0
+      actualData.h || 0
     );
     const volume = parseFloat(
-      actualData.V || actualData.v || actualData.volume || 0
+      actualData.V || 0
     );
-    
+    const lastTradedTime = parseFloat(
+      actualData.E  || 0
+    );
     const converted = {
       exchange: 'binance',
       type: instrumentType,
@@ -507,12 +527,13 @@ class BinanceConnector {
       mark_price: markPrice.toFixed(2),
       min_price: lowPrice.toFixed(2),
       max_price: highPrice.toFixed(2),
-      volume: volume.toFixed(2)
+      volume: volume.toFixed(2),
+      timestamp: lastTradedTime
     };
     
     // ✅ DEBUG: Log converted data for options
     if (isOption) {
-      console.log('✅ [CONVERTED]:', symbol, 'Last:', lastPrice.toFixed(2));
+      console.log('✅ [CONVERTED]:', symbol, 'Last:', lastPrice.toFixed(2),  'Time:', lastTradedTime);
     }
     
     this.onData(`binance_${symbol.toLowerCase()}`, converted);

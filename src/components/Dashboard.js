@@ -507,39 +507,61 @@ const Dashboard = () => {
       }
     }
     
-    else if (baseExchange === 'bybit') {
-      if (type === 'future') {
-        include = upperInstrument === 'BTCUSDT' || 
-                  /^BTC-\d{1,2}[A-Z]{3}\d{2}$/i.test(upperInstrument);
-      } 
-      else if (type === 'option') {
-        const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2}-\d{3,6}-[CP]$/i.test(upperInstrument);
-        
-        if (isOption) {
-          include = true;
+    // Dashboard.jsx - Fix Bybit futures filtering
 
-          if (applied.expiry && applied.expiry.trim()) {
-            let expiryNorm = applied.expiry.trim().toUpperCase();
-            if (/^\d{1,2}[A-Z]{3}\d{2}$/i.test(expiryNorm)) {
-              include = upperInstrument.includes(`-${expiryNorm}-`);
-            }
-          }
+// Around line 280, in the filteredMarketData section
+// REPLACE the Bybit section with this:
 
-          if (include && applied.startStrike && applied.startStrike.trim()) {
-            const start = parseInt(applied.startStrike);
-            const gap = parseInt(applied.gap || 1000);
-            const count = parseInt(applied.entryCount || 5);
-            const parts = upperInstrument.split('-');
-            const strike = parseInt(parts[2]);
+else if (baseExchange === 'bybit') {
+  if (type === 'future') {
+    // ✅ CRITICAL FIX: Match Bybit's actual future format
+    // Perpetual: BTCUSDT
+    // Quarterly: BTCUSDT-10OCT25, BTCUSDT-27DEC24, etc.
+    
+    // Always include perpetual
+    if (upperInstrument === 'BTCUSDT') {
+      include = true;
+    }
+    // Include quarterly futures (BTCUSDT-10OCT25 format)
+    else if (/^BTCUSDT-\d{1,2}[A-Z]{3}\d{2}$/i.test(upperInstrument)) {
+      include = true;
+      
+      // If specific expiry is selected, filter by it
+      if (applied.expiry && applied.expiry.trim()) {
+        const expiryNorm = applied.expiry.trim().toUpperCase();
+        // Check if instrument ends with the expiry (e.g., -10OCT25)
+        include = upperInstrument.endsWith(`-${expiryNorm}`);
+      }
+    }
+  } 
+  else if (type === 'option') {
+    const isOption = /^BTC-\d{1,2}[A-Z]{3}\d{2}-\d{3,6}-[CP]$/i.test(upperInstrument);
+    
+    if (isOption) {
+      include = true;
 
-            if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
-              const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
-              include = validStrikes.includes(strike);
-            }
-          }
+      if (applied.expiry && applied.expiry.trim()) {
+        let expiryNorm = applied.expiry.trim().toUpperCase();
+        if (/^\d{1,2}[A-Z]{3}\d{2}$/i.test(expiryNorm)) {
+          include = upperInstrument.includes(`-${expiryNorm}-`);
+        }
+      }
+
+      if (include && applied.startStrike && applied.startStrike.trim()) {
+        const start = parseInt(applied.startStrike);
+        const gap = parseInt(applied.gap || 1000);
+        const count = parseInt(applied.entryCount || 5);
+        const parts = upperInstrument.split('-');
+        const strike = parseInt(parts[2]);
+
+        if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
+          const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
+          include = validStrikes.includes(strike);
         }
       }
     }
+  }
+}
     
     else if (baseExchange === 'okx') {
       const rowType = (row?.type || '').toLowerCase();

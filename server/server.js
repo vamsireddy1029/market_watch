@@ -38,34 +38,21 @@ const CONFIG_FILE_PATH = path.join(__dirname, 'strategy-configs.json');
  * @param {object} config - Exchange config (to extract symbol if needed)
  * @returns {string} - Properly formatted key
  */
-
-
 function formatMarketDataKey(exchange, instrument, config = {}) {
   const baseExchange = exchange.split('_')[0].toLowerCase();
   const instrumentUpper = (instrument || '').toUpperCase();
   
   let formattedKey;
   
-  // ✅ BINANCE: Format properly
   if (baseExchange === 'binance') {
-    // For options: BTC-251019-106000-C → binance_BTC-251019-106000-C
-    // For futures: BTCUSDT_241227 → binance_BTCUSDT_241227
-    // For perpetual: BTCUSDT → binance_BTCUSDT
-    
     if (instrumentUpper.includes('-') && instrumentUpper.match(/-\d+-[CP]$/)) {
-      // Option format
       formattedKey = `binance_${instrumentUpper}`;
     } else if (instrumentUpper.includes('_')) {
-      // Future with expiry: BTCUSDT_241227
       formattedKey = `binance_${instrumentUpper}`;
     } else {
-      // Perpetual: BTCUSDT
       formattedKey = `binance_${instrumentUpper}`;
     }
-  }
-  
-  // ✅ DERIBIT: Extract symbol from config or instrument
-  else if (baseExchange === 'deribit') {
+  } else if (baseExchange === 'deribit') {
     let symbol = (config.symbol || 'BTC').toLowerCase();
     
     if (!config.symbol && instrumentUpper.includes('-')) {
@@ -76,15 +63,9 @@ function formatMarketDataKey(exchange, instrument, config = {}) {
     }
     
     formattedKey = `deribit_${symbol}_${instrumentUpper}`;
-  }
-  
-  // ✅ BYBIT
-  else if (baseExchange === 'bybit') {
+  } else if (baseExchange === 'bybit') {
     formattedKey = `bybit_${instrumentUpper}`;
-  }
-  
-  // ✅ OKX
-  else if (baseExchange === 'okx') {
+  } else if (baseExchange === 'okx') {
     let symbol = (config.symbol || 'BTC').toLowerCase();
     
     if (!config.symbol && instrumentUpper.includes('-')) {
@@ -95,20 +76,15 @@ function formatMarketDataKey(exchange, instrument, config = {}) {
     }
     
     formattedKey = `okx_${symbol}_${instrumentUpper}`;
-  }
-  
-  // ✅ LIGHTER
-  else if (baseExchange === 'lighter') {
+  } else if (baseExchange === 'lighter') {
     formattedKey = `lighter_${instrumentUpper}`;
-  }
-  
-  // Fallback
-  else {
+  } else {
     formattedKey = `${baseExchange}_${instrumentUpper}`;
   }
   
   return formattedKey;
 }
+
 // ==================== FILE I/O ====================
 async function loadConfigsFromFile() {
   try {
@@ -133,7 +109,6 @@ async function saveConfigsToFile(configs) {
 
 // ==================== WEBSOCKET BROADCASTING ====================
 function broadcastMarketData(key, data) {
-  // ✅ DEBUG: Log what we're broadcasting
   if (key.includes('binance') && key.includes('251018')) {
     console.log('📤 [BROADCAST] Key:', key);
     console.log('📤 [BROADCAST] Data:', JSON.stringify(data, null, 2));
@@ -157,13 +132,71 @@ function broadcastMarketData(key, data) {
   }
 }
 
-function broadcastStrategyUpdates() {
-  const updates = strategyCalculator.calculateAllStrategies();
-  if (updates.length > 0) {
-    const message = JSON.stringify({ type: 'strategyUpdate', data: updates });
-    connectedClients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) client.send(message);
-    });
+// ==================== STRATEGY UPDATES ====================
+let strategyUpdateInterval = null;
+let lastUpdateTime = Date.now();
+let updateCount = 0;
+
+function startStrategyUpdates() {
+  if (strategyUpdateInterval) {
+    console.log('⚠️ Strategy updates already running');
+    return;
+  }
+  
+  console.log('🚀 Starting REAL-TIME strategy updates (50ms interval)');
+  
+  strategyUpdateInterval = setInterval(() => {
+    try {
+      const updates = strategyCalculator.calculateAllStrategies();
+      
+      if (updates.length > 0 && connectedClients.size > 0) {
+        const message = JSON.stringify({ 
+          type: 'strategyUpdate', 
+          data: updates,
+          serverTime: Date.now()
+        });
+        
+        let sentCount = 0;
+        let failedCount = 0;
+        
+        connectedClients.forEach(client => {
+          if (client.readyState === WebSocket.OPEN) {
+            try {
+              client.send(message);
+              sentCount++;
+            } catch (e) {
+              console.error('❌ Send error:', e.message);
+              failedCount++;
+            }
+          } else {
+            connectedClients.delete(client);
+          }
+        });
+        
+        updateCount++;
+        
+        if (Date.now() - lastUpdateTime > 5000) {
+          const avgHz = (updateCount / 5).toFixed(1);
+          console.log(`📊 Updates: ${avgHz}Hz | Clients: ${sentCount} | Strategies: ${updates.length}`);
+          lastUpdateTime = Date.now();
+          updateCount = 0;
+        }
+        
+        if (failedCount > 0) {
+          console.warn(`⚠️ Failed to send to ${failedCount} clients`);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Strategy update error:', error.message);
+    }
+  }, 50);
+}
+
+function stopStrategyUpdates() {
+  if (strategyUpdateInterval) {
+    clearInterval(strategyUpdateInterval);
+    strategyUpdateInterval = null;
+    console.log('⏸️ Strategy updates stopped');
   }
 }
 
@@ -172,14 +205,23 @@ wss.on('connection', (ws) => {
   console.log('✅ Client connected');
   connectedClients.add(ws);
   
-  // Send current market data
   ws.send(JSON.stringify({ type: 'marketData', data: marketData }));
   
-  // Send current strategies
   const strategies = strategyCalculator.calculateAllStrategies();
   if (strategies.length > 0) {
     ws.send(JSON.stringify({ type: 'strategyUpdate', data: strategies }));
   }
+  
+  ws.on('message', (message) => {
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong' }));
+      }
+    } catch (e) {
+      // Ignore invalid messages
+    }
+  });
   
   ws.on('close', () => {
     console.log('❌ Client disconnected');
@@ -192,28 +234,10 @@ wss.on('connection', (ws) => {
   });
 });
 
-// ==================== STRATEGY UPDATES ====================
-let strategyUpdateInterval = null;
-
-function startStrategyUpdates() {
-  if (!strategyUpdateInterval) {
-    strategyUpdateInterval = setInterval(() => broadcastStrategyUpdates(), 500);
-  }
-}
-
-function stopStrategyUpdates() {
-  if (strategyUpdateInterval) {
-    clearInterval(strategyUpdateInterval);
-    strategyUpdateInterval = null;
-  }
-}
-
-// ==================== CONNECTOR HELPER ====================
-
 // ==================== CONNECTOR HELPER ====================
 function getConnector(exchange, onData, onMetadata) {
   const ex = exchange.toLowerCase();
-  console.log(`🔧 Creating connector for: ${ex}`); // ✅ ADD DEBUG
+  console.log(`🔧 Creating connector for: ${ex}`);
   
   if (ex === 'deribit' || ex.startsWith('deribit_')) {
     console.log('✅ Creating Deribit connector');
@@ -296,7 +320,7 @@ app.post('/api/configs/delete', async (req, res) => {
 });
 
 app.post('/api/fetch-metadata', async (req, res) => {
-  const { exchange, instrumentType, symbol, strategy } = req.body; // ✅ ADD strategy
+  const { exchange, instrumentType, symbol, strategy } = req.body;
   console.log('🚨 [FETCH-METADATA] Request received:', req.body);
   try {
     let baseExchange = exchange;
@@ -307,7 +331,6 @@ app.post('/api/fetch-metadata', async (req, res) => {
     baseExchange = baseExchange.toLowerCase();
     const symbolToUse = symbol || 'BTC';
     
-    // ✅ NEW: For Jelly/Synthetic, fetch both option and future
     const isJellyOrSynthetic = strategy && ['jelly', 'synthetic'].includes(strategy.toLowerCase());
     
     console.log(`📡 Fetching metadata for ${baseExchange} (${symbolToUse}, type: ${instrumentType}, strategy: ${strategy})...`);
@@ -327,7 +350,6 @@ app.post('/api/fetch-metadata', async (req, res) => {
         optionExpiries: data.optionExpiries?.length || 0
       });
       
-      // ✅ MERGE metadata instead of replacing
       if (!metadata[baseExchange]) {
         metadata[baseExchange] = data;
       } else {
@@ -345,11 +367,9 @@ app.post('/api/fetch-metadata', async (req, res) => {
     console.log(`🔧 Creating connector for: ${baseExchange}`);
     const tempConnector = getConnector(baseExchange, onData, onMetadata);
     
-    // ✅ NEW: If Jelly/Synthetic, fetch both types
     if (isJellyOrSynthetic) {
       console.log('🎯 Jelly/Synthetic detected - fetching BOTH options and futures...');
       
-      // Fetch options first
       await tempConnector.connect({ 
         isMetadataFetch: true,
         instrumentType: 'option',
@@ -357,7 +377,6 @@ app.post('/api/fetch-metadata', async (req, res) => {
       });
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // Disconnect and reconnect for futures
       if (tempConnector && typeof tempConnector.disconnect === 'function') {
         tempConnector.disconnect();
       }
@@ -375,13 +394,12 @@ app.post('/api/fetch-metadata', async (req, res) => {
         futureConnector.disconnect();
       }
     } else {
-      // Original single fetch
       await tempConnector.connect({ 
         isMetadataFetch: true,
         instrumentType: instrumentType || 'all',
         symbol: symbolToUse
       });
-      console.log("hello: ",instrumentType)
+      console.log("hello: ", instrumentType);
       await new Promise(resolve => setTimeout(resolve, 2000));
       
       if (tempConnector && typeof tempConnector.disconnect === 'function') {
@@ -410,6 +428,7 @@ app.post('/api/fetch-metadata', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 // ==================== STREAMING ENDPOINTS ====================
 app.post('/api/start-streaming', async (req, res) => {
   const { exchanges, config } = req.body;
@@ -425,7 +444,6 @@ app.post('/api/start-streaming', async (req, res) => {
       
       const baseExchange = exchange.split('_')[0];
       
-      // Stop existing connector
       if (activeConnectors[exchange]) {
         console.log(`🛑 Stopping existing ${exchange} connector...`);
         activeConnectors[exchange].disconnect();
@@ -433,7 +451,6 @@ app.post('/api/start-streaming', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
       
-      // Clear old data
       console.log(`🧹 Clearing old data for ${exchange}...`);
       Object.keys(marketData).forEach(key => {
         if (key.startsWith(`${baseExchange}_`)) {
@@ -442,7 +459,6 @@ app.post('/api/start-streaming', async (req, res) => {
         }
       });
       
-      // ✅ CRITICAL: Create onData callback with proper key formatting
       const onData = (rawInstrument, data) => {
         const key = formatMarketDataKey(exchange, data.instrument, config[exchange] || {});
         
@@ -471,7 +487,6 @@ app.post('/api/start-streaming', async (req, res) => {
       console.log(`✅ ${exchange} connector started with config:`, config[exchange]);
     }
     
-    // ✅ DEBUG: Log marketData keys after streaming starts
     console.log(`📊 [MARKETDATA] Total keys: ${Object.keys(marketData).length}`);
     
     const binanceKeys = Object.keys(marketData).filter(k => k.startsWith('binance'));
@@ -516,7 +531,6 @@ app.post('/api/stop-streaming', async (req, res) => {
 });
 
 // ==================== STRATEGY ENDPOINTS ====================
-// ==================== STRATEGY ENDPOINTS ====================
 app.post('/api/strategy/add', async (req, res) => {
   try {
     const { tableId, config } = req.body;
@@ -531,7 +545,6 @@ app.post('/api/strategy/add', async (req, res) => {
     
     console.log('📊 Adding strategy:', { tableId, config });
     
-    // Stop existing connectors
     Object.keys(strategyConnectors).forEach(key => {
       if (key.startsWith(`${tableId}_`)) {
         console.log(`🛑 Stopping existing connector: ${key}`);
@@ -548,12 +561,9 @@ app.post('/api/strategy/add', async (req, res) => {
     
     console.log(`🔧 Creating connectors with base key: ${baseConnectorKey}`);
     
-    // ✅ CRITICAL FIX: Proper onData callback
     const onData = (rawInstrument, data) => {
-      // Use the data.instrument field (already formatted correctly by connector)
       const key = formatMarketDataKey(exchange, data.instrument, config);
       
-      // Debug for Binance options
       if (exchange === 'binance' && data.instrument.includes('-')) {
         console.log(`💾 [Strategy ${tableId}] Key: ${key}`);
         console.log(`💾 [Strategy ${tableId}] Instrument: ${data.instrument}`);
@@ -565,8 +575,6 @@ app.post('/api/strategy/add', async (req, res) => {
     };
     
     const onMetadata = () => {};
-    
-    // ... rest of your strategy setup code (Jelly, Synthetic, C-F/F, etc.)
     
     if (config.strategy.toLowerCase() === 'jelly') {
       console.log('🎯 Setting up Jelly strategy with dual subscriptions...');
@@ -604,7 +612,6 @@ app.post('/api/strategy/add', async (req, res) => {
       console.log(`✅ Future connector created`);
       
     } else if (config.strategy.toLowerCase() === 'synthetic') {
-      // Synthetic setup...
       const optionConnectorConfig = {
         isMetadataFetch: false,
         instrumentType: 'option',
@@ -634,7 +641,6 @@ app.post('/api/strategy/add', async (req, res) => {
       strategyConnectors[`${baseConnectorKey}_future`] = futureConnector;
       
     } else {
-      // Other strategies...
       let instrumentType, expiryToSubscribe;
       
       if (config.strategy.toLowerCase() === 'c-f/f') {
@@ -682,7 +688,6 @@ app.post('/api/strategy/add', async (req, res) => {
     
     console.log(`📊 Strategy calculation result: ${result?.data?.length || 0} rows`);
     
-    // ✅ DEBUG: Check marketData keys
     const relevantKeys = Object.keys(marketData).filter(k => 
       k.startsWith(`${exchange}_`)
     );
@@ -711,7 +716,6 @@ app.post('/api/strategy/remove', (req, res) => {
     
     console.log(`🗑️ Removing strategy: ${tableId}`);
     
-    // ✅ Disconnect all connectors for this table
     Object.keys(strategyConnectors).forEach(key => {
       if (key.startsWith(`${tableId}_`)) {
         console.log(`🛑 Disconnecting connector: ${key}`);
@@ -720,10 +724,8 @@ app.post('/api/strategy/remove', (req, res) => {
       }
     });
     
-    // ✅ Remove from calculator
     strategyCalculator.removeStrategy(tableId);
     
-    // ✅ Stop updates if no active strategies
     if (strategyCalculator.activeStrategies.size === 0) {
       console.log('⏸️ No active strategies, stopping updates...');
       stopStrategyUpdates();
@@ -732,16 +734,6 @@ app.post('/api/strategy/remove', (req, res) => {
     res.json({ success: true });
   } catch (error) {
     console.error('❌ Remove strategy error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-app.get('/api/strategy/all', (req, res) => {
-  try {
-    const strategies = strategyCalculator.calculateAllStrategies();
-    res.json({ success: true, data: strategies });
-  } catch (error) {
-    console.error('❌ Get strategies error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -945,7 +937,7 @@ app.get('/health', (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📁 Config file: ${CONFIG_FILE_PATH}`);
   console.log(`🏦 Supported exchanges: Deribit, Binance, Bybit, OKX, Lighter`);
@@ -962,4 +954,4 @@ process.on('SIGTERM', () => {
       process.exit(0);
     });
   });
-  });
+});

@@ -36,12 +36,16 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
     Object.entries(grouped).forEach(([ex, rows]) => {
       if (rows.length === 0) {
         colMap[ex] = [
-          "instrument",
-          "last_price",
-          "mark_price",
-          "best_bid_price",
-          "best_ask_price",
-        ];
+            "instrument",
+            "last_price",
+            "mark_price",
+            "best_bid_price",
+            "best_ask_price",
+            "min_price",
+            "max_price",
+            "volume",
+            "timestamp"
+          ];
         return;
       }
       colMap[ex] = Object.keys(rows[0]).filter(
@@ -50,6 +54,59 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
     });
     return colMap;
   }, [grouped]);
+
+    const formatTime = (timestamp) => {
+    if (!timestamp) return '-';
+    
+    // If already a formatted string, return as is
+    if (typeof timestamp === 'string' && timestamp.includes(':')) {
+      return timestamp;
+    }
+    
+    // Convert epoch to readable format
+    let dateValue = parseInt(timestamp);
+    
+    // Check if valid date
+    if (dateValue < 10000000000) {
+      dateValue = dateValue * 1000;
+    }
+    
+    const date = new Date(dateValue);
+    
+    if (isNaN(date.getTime())) return '-';
+    
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    
+    return `${hours}:${minutes}:${seconds}`;
+  };
+
+  // ✅ Helper function to format volume
+  const formatVolume = (volume) => {
+    if (!volume || volume === '-') return '-';
+    
+    const num = parseFloat(volume);
+    if (isNaN(num)) return '-';
+    
+    // Format with commas for thousands
+    if (num >= 1000000) {
+      return (num / 1000000).toFixed(2) + 'M';
+    } else if (num >= 1000) {
+      return (num / 1000).toFixed(2) + 'K';
+    }
+    
+    return num.toFixed(2);
+  };
+
+   const formatPrice = (price) => {
+    if (!price || price === '-') return '-';
+    
+    const num = parseFloat(price);
+    if (isNaN(num)) return '-';
+    
+    return num.toFixed(2);
+  };
 
   // ✅ Highlight changed cells on update
   useEffect(() => {
@@ -360,28 +417,49 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
                       ))}
                     </tr>
                   </thead>
+                  
+                  
                   <tbody>
                     {sorted.map((row) => {
                       const rowKey = `${exchangeKey}_${row.instrument}`;
                       return (
                         <tr key={rowKey}>
-                          {columns.map((col) => (
-                            <td
-                              key={col}
-                              data-key={rowKey}
-                              data-col={col}
-                              className={
-                                col === "last_price" || col === "mark_price"
-                                  ? getChangeColor(
-                                      row.last_price,
-                                      row.mark_price
-                                    )
-                                  : ""
-                              }
-                            >
-                              {row[col]}
-                            </td>
-                          ))}
+                          {columns.map((col) => {
+                            let cellValue = row[col];
+                            
+                            // ✅ Format time columns (timestamp, last_traded_time, etc.)
+                            if (col === 'timestamp' || col === 'last_traded_time' || col.toLowerCase().includes('time')) {
+                              cellValue = formatTime(cellValue);
+                            }
+                            // ✅ Format volume columns
+                            else if (col === 'volume' || col === 'total_volume' || col.toLowerCase().includes('volume')) {
+                              cellValue = formatVolume(cellValue);
+                            }
+                            // ✅ Format price columns
+                            else if (col.includes('price') || col === 'last_price' || col === 'mark_price' || 
+                                     col === 'best_bid_price' || col === 'best_ask_price' || 
+                                     col === 'min_price' || col === 'max_price') {
+                              cellValue = formatPrice(cellValue);
+                            }
+                            
+                            return (
+                              <td
+                                key={col}
+                                data-key={rowKey}
+                                data-col={col}
+                                className={
+                                  col === "last_price" || col === "mark_price"
+                                    ? getChangeColor(
+                                        row.last_price,
+                                        row.mark_price
+                                      )
+                                    : ""
+                                }
+                              >
+                                {cellValue ?? '-'}
+                              </td>
+                            );
+                          })}
                         </tr>
                       );
                     })}

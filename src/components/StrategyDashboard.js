@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 
+const metadataCache = new Map();
 const StrategyDashboard = () => {
   const [tables, setTables] = useState([]);
+  useEffect(() => {
+  setTables([]);
+}, []);
   const [tableCounter, setTableCounter] = useState(0);
   const [showModal, setShowModal] = useState(false);
   const [activeTableIndex, setActiveTableIndex] = useState(null);
@@ -24,6 +28,22 @@ const StrategyDashboard = () => {
   const defaultEx = (params.get('default') || '').trim().toLowerCase();
   const initialExchange = defaultEx || selectedExList[0] || '';
   
+
+const sortExpiriesByDate = (expiries) => {
+  if (!expiries || expiries.length === 0) return [];
+  
+  return [...expiries].sort((a, b) => {
+    // Handle perpetual case
+    if (a.toLowerCase() === 'perpetual') return -1;
+    if (b.toLowerCase() === 'perpetual') return 1;
+    
+    const dateA = parseExpiryDate(a);
+    const dateB = parseExpiryDate(b);
+    
+    return dateA - dateB;
+  });
+};
+
   const [modalForm, setModalForm] = useState({
     exchange: initialExchange,
     strategy: '',
@@ -988,28 +1008,36 @@ const handleAddCFFRow = async () => {
       console.error('Failed to delete configuration:', error);
     }
   };
-  useEffect(() => {
+ useEffect(() => {
   // Auto-adjust strike intervals when symbol changes
   if (modalForm.symbol === 'ETH') {
     setModalForm(prev => ({
       ...prev,
-      strikeInterval: '50',  // ✅ Set to 50 for ETH
+      strikeInterval: '50',
       gap: '50'
     }));
   } else if (modalForm.symbol === 'BTC') {
     setModalForm(prev => ({
       ...prev,
-      strikeInterval: '1000',  // ✅ Set to 1000 for BTC
+      strikeInterval: '1000',
       gap: '1000'
     }));
   }
-}, [modalForm.symbol]);
+  
+  // ✅ FIX: Clear cache when symbol changes to force fresh data
+  const exchange = modalForm.exchange;
+  if (exchange) {
+    metadataCache.delete(`${exchange}_${modalForm.symbol}_option`);
+    metadataCache.delete(`${exchange}_${modalForm.symbol}_future`);
+  }
+}, [modalForm.symbol, modalForm.exchange]);
 
   // StrategyDashboard.jsx - Replace WebSocket useEffect (around line 600)
 
 useEffect(() => {
   let reconnectTimer = null;
   let heartbeatInterval = null;
+
 
   const connect = () => {
     try {
@@ -1020,7 +1048,6 @@ useEffect(() => {
         console.log('✅ WebSocket connected');
         setWsConnected(true);
         
-        // ✅ NEW: Send heartbeat to keep connection alive
         heartbeatInterval = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'ping' }));
@@ -1028,54 +1055,47 @@ useEffect(() => {
         }, 30000);
       };
 
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
+     ws.onmessage = (event) => {
+  try {
+    const message = JSON.parse(event.data);
+    
+    if (message.type === 'pong') return;
+    
+    if (message.type === 'strategyUpdate' && message.data) {
+      setTables(prevTables => {
+        const updatedTables = prevTables.map(table => {
+          const strategyData = message.data.find(s => s.tableId === table.id);
           
-          // ✅ Ignore pong messages
-          if (message.type === 'pong') return;
-          
-          if (message.type === 'strategyUpdate' && message.data) {
-            console.log('📊 Strategy update received:', message.data.length, 'tables');
+          if (strategyData) {
+            const data = strategyData.data || [];
+            const isCFF = table.config.strategy === 'C-F/F';
+            const isCustomMode = table.config.selectedFutures !== undefined;
             
-            setTables(prevTables => {
-              // ✅ CRITICAL: Create a completely new array to force re-render
-              const updatedTables = prevTables.map(table => ({ ...table }));
-              
-              message.data.forEach(strategyData => {
-                const tableIndex = updatedTables.findIndex(t => t.id === strategyData.tableId);
-                if (tableIndex !== -1) {
-                  const data = strategyData.data || [];
-                  const table = updatedTables[tableIndex];
-                  const isCFF = table.config.strategy === 'C-F/F';
-                  const isCustomMode = table.config.selectedFutures !== undefined;
-                  
-                  // ✅ Only sort if in "All Expiries" mode
-                  const processedData = (isCFF && !isCustomMode) ? sortByExpiry(data) : data;
-                  
-                  // ✅ CRITICAL: Create new object to trigger re-render
-                  updatedTables[tableIndex] = {
-                    ...updatedTables[tableIndex],
-                    data: processedData,
-                    liveData: {
-                      ltp: parseFloat(strategyData.spotPrice),
-                      timestamp: new Date(strategyData.timestamp).toLocaleTimeString()
-                    },
-                    // ✅ Add update timestamp to force re-render
-                    lastUpdate: Date.now()
-                  };
-                  
-                  console.log(`✅ Updated table ${strategyData.tableId} with ${processedData.length} rows`);
-                }
-              });
-              
-              return updatedTables;
-            });
+            // Process data
+            const processedData = (isCFF && !isCustomMode) ? sortByExpiry(data) : [...data];
+            
+            // ✅ FIX: Update data WITHOUT remounting component
+            return {
+              ...table,
+              data: processedData,
+              liveData: {
+                ltp: parseFloat(strategyData.spotPrice),
+                timestamp: new Date(strategyData.timestamp).toLocaleTimeString()
+              }
+              // ❌ REMOVED: _renderKey - this was causing scroll reset
+            };
           }
-        } catch (err) {
-          console.error("Failed to parse message:", err);
-        }
-      };
+          
+          return table;
+        });
+        
+        return updatedTables;
+      });
+    }
+  } catch (err) {
+    console.error("Failed to parse message:", err);
+  }
+};
 
       ws.onerror = (err) => {
         console.error("WebSocket error", err);
@@ -1101,7 +1121,6 @@ useEffect(() => {
 
   connect();
 
-  // ✅ Cleanup on unmount
   return () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (heartbeatInterval) clearInterval(heartbeatInterval);
@@ -1114,12 +1133,32 @@ useEffect(() => {
       console.error('Error closing WebSocket:', e);
     }
   };
-}, []); 
+}, []);
+
 
   const fetchBinanceInstruments = async (type = 'option') => {
   try {
-    setIsLoadingExpiries(true);
     const symbol = modalForm.symbol || 'BTC';
+    const cacheKey = `binance_${symbol}_${type}`;
+    
+    if (metadataCache.has(cacheKey)) {
+      const cached = metadataCache.get(cacheKey);
+      const age = Date.now() - cached.timestamp;
+      if (age < 5 * 60 * 1000) {
+        console.log(`✅ Using cached Binance ${symbol} ${type} metadata`);
+        setAvailableData(prev => ({
+          ...prev,
+          binance: {
+            ...prev.binance,
+            optionExpiries: type === 'option' ? sortExpiriesByDate(cached.data.optionExpiries) : prev.binance.optionExpiries,
+            futureExpiries: type === 'future' ? sortExpiriesByDate(cached.data.futureExpiries) : prev.binance.futureExpiries
+          }
+        }));
+        return;
+      }
+    }
+    
+    setIsLoadingExpiries(true);
     
     const response = await fetch('http://localhost:8080/api/fetch-metadata', {
       method: 'POST',
@@ -1135,27 +1174,33 @@ useEffect(() => {
     const result = await response.json();
     
     if (result.success && result.metadata) {
+      metadataCache.set(cacheKey, {
+        data: result.metadata,
+        timestamp: Date.now()
+      });
+      
       setAvailableData(prev => ({
         ...prev,
         binance: {
           ...prev.binance,
-          optionExpiries: type === 'option' ? result.metadata.optionExpiries : prev.binance.optionExpiries,
-          futureExpiries: type === 'future' ? result.metadata.futureExpiries : prev.binance.futureExpiries
+          optionExpiries: type === 'option' ? sortExpiriesByDate(result.metadata.optionExpiries) : prev.binance.optionExpiries,
+          futureExpiries: type === 'future' ? sortExpiriesByDate(result.metadata.futureExpiries) : prev.binance.futureExpiries
         }
       }));
       
       console.log(`✅ Binance ${symbol} ${type} metadata loaded:`, result.metadata);
       
-      // Set default expiry based on type
       if (type === 'future' && result.metadata.futureExpiries && result.metadata.futureExpiries.length > 0) {
+        const sortedExpiries = sortExpiriesByDate(result.metadata.futureExpiries);
         setModalForm(prev => ({ 
           ...prev, 
-          futureExpiry: prev.futureExpiry || result.metadata.futureExpiries[0]
+          futureExpiry: prev.futureExpiry || sortedExpiries[0]
         }));
       } else if (type === 'option' && result.metadata.optionExpiries && result.metadata.optionExpiries.length > 0) {
+        const sortedExpiries = sortExpiriesByDate(result.metadata.optionExpiries);
         setModalForm(prev => ({ 
           ...prev, 
-          optionExpiry: prev.optionExpiry || result.metadata.optionExpiries[0]
+          optionExpiry: prev.optionExpiry || sortedExpiries[0]
         }));
       }
     }
@@ -1165,51 +1210,106 @@ useEffect(() => {
     setIsLoadingExpiries(false);
   }
 };
+
+
 const fetchBybitInstruments = async (type = 'option') => {
   try {
+    const symbol = modalForm.symbol || 'BTC';
+    const cacheKey = `bybit_${symbol}_${type}`;
+    
+    if (metadataCache.has(cacheKey)) {
+      const cached = metadataCache.get(cacheKey);
+      const age = Date.now() - cached.timestamp;
+      if (age < 5 * 60 * 1000) {
+        console.log(`✅ Using cached Bybit ${symbol} ${type} metadata`);
+        setAvailableData(prev => ({
+          ...prev,
+          bybit: {
+            ...prev.bybit,
+            optionExpiries: type === 'option' ? sortExpiriesByDate(cached.data.optionExpiries) : prev.bybit.optionExpiries,
+            futureExpiries: type === 'future' ? sortExpiriesByDate(cached.data.futureExpiries) : prev.bybit.futureExpiries
+          }
+        }));
+        return;
+      }
+    }
+    
     setIsLoadingExpiries(true);
+    
     const response = await fetch('http://localhost:8080/api/fetch-metadata', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ exchange: 'bybit', instrumentType: type, strategy: modalForm.strategy })
+      body: JSON.stringify({ 
+        exchange: 'bybit', 
+        instrumentType: type, 
+        symbol: symbol,
+        strategy: modalForm.strategy 
+      })
     });
     
     const result = await response.json();
     
     if (result.success && result.metadata) {
+      metadataCache.set(cacheKey, {
+        data: result.metadata,
+        timestamp: Date.now()
+      });
+      
       setAvailableData(prev => ({
         ...prev,
         bybit: {
           ...prev.bybit,
-          ...result.metadata
+          optionExpiries: type === 'option' ? sortExpiriesByDate(result.metadata.optionExpiries) : prev.bybit.optionExpiries,
+          futureExpiries: type === 'future' ? sortExpiriesByDate(result.metadata.futureExpiries) : prev.bybit.futureExpiries
         }
       }));
       
-      console.log('✅ Bybit metadata loaded:', result.metadata);
+      console.log(`✅ Bybit ${symbol} ${type} metadata loaded:`, result.metadata);
       
       if (type === 'future' && result.metadata.futureExpiries && result.metadata.futureExpiries.length > 0) {
+        const sortedExpiries = sortExpiriesByDate(result.metadata.futureExpiries);
         setModalForm(prev => ({ 
           ...prev, 
-          futureExpiry: prev.futureExpiry || result.metadata.futureExpiries[0]
+          futureExpiry: prev.futureExpiry || sortedExpiries[0]
         }));
       } else if (type === 'option' && result.metadata.optionExpiries && result.metadata.optionExpiries.length > 0) {
+        const sortedExpiries = sortExpiriesByDate(result.metadata.optionExpiries);
         setModalForm(prev => ({ 
           ...prev, 
-          optionExpiry: prev.optionExpiry || result.metadata.optionExpiries[0]
+          optionExpiry: prev.optionExpiry || sortedExpiries[0]
         }));
       }
     }
   } catch (error) {
-    console.error('Failed to fetch Deribit instruments:', error);
+    console.error('Failed to fetch Bybit instruments:', error);
   } finally {
     setIsLoadingExpiries(false);
   }
 };
-// Update around line 847-888
+
 const fetchDeribitInstruments = async (type = 'option') => {
   try {
-    setIsLoadingExpiries(true);
     const symbol = modalForm.symbol || 'BTC';
+    const cacheKey = `deribit_${symbol}_${type}`;
+    
+    if (metadataCache.has(cacheKey)) {
+      const cached = metadataCache.get(cacheKey);
+      const age = Date.now() - cached.timestamp;
+      if (age < 5 * 60 * 1000) {
+        console.log(`✅ Using cached Deribit ${symbol} ${type} metadata`);
+        setAvailableData(prev => ({
+          ...prev,
+          deribit: {
+            ...prev.deribit,
+            optionExpiries: type === 'option' ? sortExpiriesByDate(cached.data.optionExpiries) : prev.deribit.optionExpiries,
+            futureExpiries: type === 'future' ? sortExpiriesByDate(cached.data.futureExpiries) : prev.deribit.futureExpiries
+          }
+        }));
+        return;
+      }
+    }
+    
+    setIsLoadingExpiries(true);
     
     const response = await fetch('http://localhost:8080/api/fetch-metadata', {
       method: 'POST',
@@ -1225,26 +1325,33 @@ const fetchDeribitInstruments = async (type = 'option') => {
     const result = await response.json();
     
     if (result.success && result.metadata) {
+      metadataCache.set(cacheKey, {
+        data: result.metadata,
+        timestamp: Date.now()
+      });
+      
       setAvailableData(prev => ({
         ...prev,
         deribit: {
           ...prev.deribit,
-          optionExpiries: type === 'option' ? result.metadata.optionExpiries : prev.deribit.optionExpiries || [],
-          futureExpiries: type === 'future' ? result.metadata.futureExpiries : prev.deribit.futureExpiries || []
+          optionExpiries: type === 'option' ? sortExpiriesByDate(result.metadata.optionExpiries) : prev.deribit.optionExpiries || [],
+          futureExpiries: type === 'future' ? sortExpiriesByDate(result.metadata.futureExpiries) : prev.deribit.futureExpiries || []
         }
       }));
       
       console.log(`✅ Deribit ${symbol} ${type} metadata loaded:`, result.metadata);
       
       if (type === 'future' && result.metadata.futureExpiries && result.metadata.futureExpiries.length > 0) {
+        const sortedExpiries = sortExpiriesByDate(result.metadata.futureExpiries);
         setModalForm(prev => ({ 
           ...prev, 
-          futureExpiry: prev.futureExpiry || result.metadata.futureExpiries[0]
+          futureExpiry: prev.futureExpiry || sortedExpiries[0]
         }));
       } else if (type === 'option' && result.metadata.optionExpiries && result.metadata.optionExpiries.length > 0) {
+        const sortedExpiries = sortExpiriesByDate(result.metadata.optionExpiries);
         setModalForm(prev => ({ 
           ...prev, 
-          optionExpiry: prev.optionExpiry || result.metadata.optionExpiries[0]
+          optionExpiry: prev.optionExpiry || sortedExpiries[0]
         }));
       }
     }
@@ -1255,8 +1362,6 @@ const fetchDeribitInstruments = async (type = 'option') => {
   }
 };
 
-
-// Replace the useEffect around line 960
 useEffect(() => {
   if (!modalForm.exchange || !showModal || !modalForm.strategy) return;
   
@@ -1265,38 +1370,40 @@ useEffect(() => {
     const isSynthetic = modalForm.strategy === 'Synthetic';
     const isCFF = modalForm.strategy === 'C-F/F';
     
-    // ✅ For Deribit
+    // ✅ FIX: Fetch both option and future in parallel for Deribit
     if (modalForm.exchange === 'deribit') {
       if (isJelly || isSynthetic) {
-        // ✅ Fetch options first with strategy parameter
-        await fetchDeribitInstruments('option');
-        await new Promise(resolve => setTimeout(resolve, 1000)); // ✅ Increased wait
-        // ✅ Then fetch futures
-        await fetchDeribitInstruments('future');
+        // Parallel fetch - both run at the same time
+        await Promise.all([
+          fetchDeribitInstruments('option'),
+          fetchDeribitInstruments('future')
+        ]);
       } else if (isCFF) {
         await fetchDeribitInstruments('future');
       } else {
         await fetchDeribitInstruments('option');
       }
     } 
-    // ✅ For Binance
+    // ✅ FIX: Fetch both option and future in parallel for Binance
     else if (modalForm.exchange === 'binance') {
       if (isJelly || isSynthetic) {
-        await fetchBinanceInstruments('option');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        await fetchBinanceInstruments('future');
+        await Promise.all([
+          fetchBinanceInstruments('option'),
+          fetchBinanceInstruments('future')
+        ]);
       } else if (isCFF) {
         await fetchBinanceInstruments('future');
       } else {
         await fetchBinanceInstruments('option');
       }
     } 
-    // ✅ For Bybit
+    // ✅ FIX: Fetch both option and future in parallel for Bybit
     else if (modalForm.exchange === 'bybit') {
       if (isJelly || isSynthetic) {
-        await fetchBybitInstruments('option');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        await fetchBybitInstruments('future');
+        await Promise.all([
+          fetchBybitInstruments('option'),
+          fetchBybitInstruments('future')
+        ]);
       } else if (isCFF) {
         await fetchBybitInstruments('future');
       } else {
@@ -1545,8 +1652,8 @@ const applyStrategy = async () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))', gap: '20px' }}>
         
 {tables.map((table, index) => (
-  <div key={table.id} style={{ 
-    background: 'white', 
+  <div key={table.id} style={{
+    background: 'white',
     borderRadius: '8px', 
     boxShadow: '0 2px 8px rgba(0,0,0,0.1)', 
     overflow: 'hidden' 
@@ -1652,20 +1759,25 @@ const applyStrategy = async () => {
       {/* Right Section - Action Buttons */}
       <div style={{ display: 'flex', gap: '5px', alignItems: 'center' }}>
         <button 
-          onClick={() => openSettings(index)} 
-          style={{ 
-            background: 'transparent', 
-            border: 'none', 
-            cursor: 'pointer', 
-            padding: '4px 8px', 
-            fontSize: '14px',
-            transition: 'transform 0.2s'
-          }}
-          onMouseEnter={(e) => e.target.style.transform = 'scale(1.1)'}
-          onMouseLeave={(e) => e.target.style.transform = 'scale(1)'}
-        >
-          ⚙️
-        </button>
+  onClick={(e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    openSettings(index);
+  }} 
+  style={{ 
+    background: 'transparent', 
+    border: 'none', 
+    cursor: 'pointer', 
+    padding: '4px 8px', 
+    fontSize: '14px',
+    transition: 'transform 0.2s'
+  }}
+  onMouseEnter={(e) => e.target.style.transform = 'scale(1.1)'}
+  onMouseLeave={(e) => e.target.style.transform = 'scale(1)'}
+  title="Settings"
+>
+  ⚙️
+</button>
         <button onClick={() => removeTable(table.id)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 8px', fontSize: '14px', color: '#e74c3c' }}>
                   ✕
                 </button>

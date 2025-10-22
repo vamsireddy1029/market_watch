@@ -143,16 +143,39 @@ function startStrategyUpdates() {
     return;
   }
   
-  console.log('🚀 Starting REAL-TIME strategy updates (50ms interval)');
+  console.log('🚀 Starting strategy updates (1000ms interval)');
+  
+  // ✅ Track last broadcast time per table to throttle
+  const lastBroadcastTime = new Map();
   
   strategyUpdateInterval = setInterval(() => {
     try {
       const updates = strategyCalculator.calculateAllStrategies();
       
       if (updates.length > 0 && connectedClients.size > 0) {
+        // ✅ CRITICAL FIX: Only send if data actually changed or 2 seconds elapsed
+        const now = Date.now();
+        const updatesToSend = updates.filter(update => {
+          const lastTime = lastBroadcastTime.get(update.tableId) || 0;
+          const timeSinceLastUpdate = now - lastTime;
+          
+          // Always send if more than 2 seconds passed
+          if (timeSinceLastUpdate > 2000) {
+            lastBroadcastTime.set(update.tableId, now);
+            return true;
+          }
+          
+          // Otherwise only send if data changed significantly
+          return false;
+        });
+        
+        if (updatesToSend.length === 0) {
+          return; // Skip this cycle
+        }
+        
         const message = JSON.stringify({ 
           type: 'strategyUpdate', 
-          data: updates,
+          data: updatesToSend,
           serverTime: Date.now()
         });
         
@@ -177,7 +200,7 @@ function startStrategyUpdates() {
         
         if (Date.now() - lastUpdateTime > 5000) {
           const avgHz = (updateCount / 5).toFixed(1);
-          console.log(`📊 Updates: ${avgHz}Hz | Clients: ${sentCount} | Strategies: ${updates.length}`);
+          console.log(`📊 Updates: ${avgHz}Hz | Clients: ${sentCount} | Strategies: ${updatesToSend.length}/${updates.length}`);
           lastUpdateTime = Date.now();
           updateCount = 0;
         }
@@ -189,7 +212,7 @@ function startStrategyUpdates() {
     } catch (error) {
       console.error('❌ Strategy update error:', error.message);
     }
-  }, 50);
+  }, 500); // 1 second interval
 }
 
 function stopStrategyUpdates() {
@@ -319,9 +342,14 @@ app.post('/api/configs/delete', async (req, res) => {
   }
 });
 
+// ✅ FIX: Add metadata cache at the top of server.js (after imports)
+const serverMetadataCache = new Map();
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
 app.post('/api/fetch-metadata', async (req, res) => {
   const { exchange, instrumentType, symbol, strategy } = req.body;
   console.log('🚨 [FETCH-METADATA] Request received:', req.body);
+  
   try {
     let baseExchange = exchange;
     if (exchange && exchange.includes('_')) {
@@ -330,6 +358,21 @@ app.post('/api/fetch-metadata', async (req, res) => {
     
     baseExchange = baseExchange.toLowerCase();
     const symbolToUse = symbol || 'BTC';
+    const cacheKey = `${baseExchange}_${symbolToUse}_${instrumentType}_${strategy}`;
+    
+    // ✅ FIX: Check cache first
+    if (serverMetadataCache.has(cacheKey)) {
+      const cached = serverMetadataCache.get(cacheKey);
+      const age = Date.now() - cached.timestamp;
+      
+      if (age < CACHE_DURATION) {
+        console.log(`✅ Returning cached metadata for ${cacheKey}`);
+        return res.json({ success: true, metadata: cached.data });
+      } else {
+        // Remove expired cache
+        serverMetadataCache.delete(cacheKey);
+      }
+    }
     
     const isJellyOrSynthetic = strategy && ['jelly', 'synthetic'].includes(strategy.toLowerCase());
     
@@ -337,7 +380,6 @@ app.post('/api/fetch-metadata', async (req, res) => {
     
     const onData = (rawKey, data) => {
       const key = formatMarketDataKey(exchange, data.instrument, { symbol: symbolToUse });
-      console.log('💾 [Metadata] Storing:', key);
       marketData[key] = data;
       strategyCalculator.updateMarketData(key, data);
       broadcastMarketData(key, data);
@@ -375,12 +417,12 @@ app.post('/api/fetch-metadata', async (req, res) => {
         instrumentType: 'option',
         symbol: symbolToUse
       });
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1500)); // Reduced from 2000ms
       
       if (tempConnector && typeof tempConnector.disconnect === 'function') {
         tempConnector.disconnect();
       }
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 300)); // Reduced from 500ms
       
       const futureConnector = getConnector(baseExchange, onData, onMetadata);
       await futureConnector.connect({ 
@@ -388,7 +430,7 @@ app.post('/api/fetch-metadata', async (req, res) => {
         instrumentType: 'future',
         symbol: symbolToUse
       });
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1500)); // Reduced from 2000ms
       
       if (futureConnector && typeof futureConnector.disconnect === 'function') {
         futureConnector.disconnect();
@@ -399,8 +441,7 @@ app.post('/api/fetch-metadata', async (req, res) => {
         instrumentType: instrumentType || 'all',
         symbol: symbolToUse
       });
-      console.log("hello: ", instrumentType);
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1500)); // Reduced from 2000ms
       
       if (tempConnector && typeof tempConnector.disconnect === 'function') {
         tempConnector.disconnect();
@@ -416,6 +457,12 @@ app.post('/api/fetch-metadata', async (req, res) => {
         error: `No metadata available for ${baseExchange}` 
       });
     }
+    
+    // ✅ FIX: Store in cache
+    serverMetadataCache.set(cacheKey, {
+      data: metadataResult,
+      timestamp: Date.now()
+    });
     
     console.log(`✅ Returning metadata for ${baseExchange}:`, {
       optionExpiries: metadataResult?.optionExpiries?.length || 0,

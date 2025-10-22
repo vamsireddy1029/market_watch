@@ -1,13 +1,58 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
-import { Search } from "lucide-react";
+import { Search, Settings } from "lucide-react";
 import "./DataGrid.css";
 
 const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
   const [sortConfig, setSortConfig] = useState({});
   const [filterText, setFilterText] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
   const previousDataRef = useRef({});
+  
+  // All available columns
+  const allColumns = [
+    "instrument",
+    "last_price",
+    "best_bid_price",
+    "best_ask_price",
+    "mark_price",
+    "min_price",
+    "max_price",
+    "volume",
+    "timestamp"
+  ];
+  
+  // Default visible columns
+  const [visibleColumns, setVisibleColumns] = useState([
+    "instrument",
+    "last_price",
+    "best_bid_price",
+    "best_ask_price",
+    "mark_price",
+    "volume",
+    "timestamp"
+  ]);
 
   const dataEntries = Object.values(marketData || {});
+
+  const toggleColumn = (column) => {
+    setVisibleColumns(prev => {
+      if (prev.includes(column)) {
+        return prev.filter(col => col !== column);
+      } else {
+        return [...prev, column];
+      }
+    });
+  };
+  
+  const toggleAllColumns = () => {
+    if (visibleColumns.length === allColumns.length) {
+      // Hide all except instrument
+      setVisibleColumns(["instrument"]);
+    } else {
+      // Show all
+      setVisibleColumns([...allColumns]);
+    }
+  };
 
   // ✅ Group by exchange instance (supports deribit_btc, deribit_eth, okx_btc, etc.)
   const grouped = useMemo(() => {
@@ -35,27 +80,19 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
     const colMap = {};
     Object.entries(grouped).forEach(([ex, rows]) => {
       if (rows.length === 0) {
-        colMap[ex] = [
-            "instrument",
-            "last_price",
-            "mark_price",
-            "best_bid_price",
-            "best_ask_price",
-            "min_price",
-            "max_price",
-            "volume",
-            "timestamp"
-          ];
+        colMap[ex] = visibleColumns;
         return;
       }
-      colMap[ex] = Object.keys(rows[0]).filter(
+      // Filter to only visible columns that exist in the data
+      const availableColumns = Object.keys(rows[0]).filter(
         (k) => k !== "exchange" && k !== "type"
       );
+      colMap[ex] = visibleColumns.filter(col => availableColumns.includes(col));
     });
     return colMap;
-  }, [grouped]);
+  }, [grouped, visibleColumns]);
 
-    const formatTime = (timestamp) => {
+  const formatTime = (timestamp) => {
     if (!timestamp) return '-';
     
     // If already a formatted string, return as is
@@ -99,7 +136,7 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
     return num.toFixed(2);
   };
 
-   const formatPrice = (price) => {
+  const formatPrice = (price) => {
     if (!price || price === '-') return '-';
     
     const num = parseFloat(price);
@@ -174,82 +211,82 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
   };
 
   const getSpotPrice = (rows, exchangeKey) => {
-  if (!rows || rows.length === 0) return null;
+    if (!rows || rows.length === 0) return null;
 
-  const baseExchange = exchangeKey.split("_")[0].toLowerCase();
-  const config = appliedConfig?.[exchangeKey];
-  const symbol = (config?.symbol || "BTC").toUpperCase();
+    const baseExchange = exchangeKey.split("_")[0].toLowerCase();
+    const config = appliedConfig?.[exchangeKey];
+    const symbol = (config?.symbol || "BTC").toUpperCase();
 
-  // Deribit perpetual
-  if (baseExchange === "deribit") {
-    const perpInstrument = `${symbol}-PERPETUAL`;
-    const perp = rows.find(
-      (r) => (r.instrument || "").toUpperCase() === perpInstrument
-    );
-    if (perp) {
-      const val = parseFloat(perp.mark_price ?? perp.last_price);
-      return Number.isFinite(val) ? val.toFixed(2) : null;
+    // Deribit perpetual
+    if (baseExchange === "deribit") {
+      const perpInstrument = `${symbol}-PERPETUAL`;
+      const perp = rows.find(
+        (r) => (r.instrument || "").toUpperCase() === perpInstrument
+      );
+      if (perp) {
+        const val = parseFloat(perp.mark_price ?? perp.last_price);
+        return Number.isFinite(val) ? val.toFixed(2) : null;
+      }
+      return null;
     }
-    return null;
-  }
 
-  // Binance / Bybit
-  if (baseExchange === "binance") {
-    const match = (r, t) =>
-      (r?.type || "").toLowerCase() === t &&
-      (r.instrument || "").toUpperCase() === 'BTCUSDT';
-    const spot = rows.find((r) => match(r, "spot"));
-    const fut = rows.find(
-      (r) => (r?.type || "").toLowerCase() === "future" &&
-             (r.instrument || "").toUpperCase() === 'BTCUSDT'
-    );
-    const val = spot
-      ? parseFloat(spot.mark_price ?? spot.last_price)
-      : fut
-      ? parseFloat(fut.mark_price ?? fut.last_price)
-      : null;
-    return Number.isFinite(val) ? val.toFixed(2) : null;
-  }
-  
-  if (baseExchange === "bybit") {
-    // Bybit only has futures (perpetual), not spot
-    const fut = rows.find(
-      (r) => (r?.type || "").toLowerCase() === "future" &&
-             (r.instrument || "").toUpperCase() === 'BTCUSDT'
-    );
-    if (fut) {
-      const val = parseFloat(fut.mark_price ?? fut.last_price);
-      return Number.isFinite(val) ? val.toFixed(2) : null;
-    }
-    return null;
-  }
-
-  if (baseExchange === 'okx') {
-    // Perpetual (BTC-USDT-SWAP or BTC-USD-SWAP)
-    const perp = rows.find((r) =>
-      (r.instrument || '').toUpperCase() === `${symbol}-USDT-SWAP` ||
-      (r.instrument || '').toUpperCase() === `${symbol}-USD-SWAP`
-    );
-    if (perp) {
-      const val = parseFloat(perp.mark_price ?? perp.last_price);
+    // Binance / Bybit
+    if (baseExchange === "binance") {
+      const match = (r, t) =>
+        (r?.type || "").toLowerCase() === t &&
+        (r.instrument || "").toUpperCase() === 'BTCUSDT';
+      const spot = rows.find((r) => match(r, "spot"));
+      const fut = rows.find(
+        (r) => (r?.type || "").toLowerCase() === "future" &&
+               (r.instrument || "").toUpperCase() === 'BTCUSDT'
+      );
+      const val = spot
+        ? parseFloat(spot.mark_price ?? spot.last_price)
+        : fut
+        ? parseFloat(fut.mark_price ?? fut.last_price)
+        : null;
       return Number.isFinite(val) ? val.toFixed(2) : null;
     }
     
-    // Spot (BTC-USDT, not BTC-USDT-SWAP)
-    const spot = rows.find(
-      (r) => (r.instrument || '').toUpperCase() === `${symbol}-USDT` &&
-             (r?.type || '').toLowerCase() === 'spot'
-    );
-    if (spot) {
-      const val = parseFloat(spot.last_price);
-      return Number.isFinite(val) ? val.toFixed(2) : null;
+    if (baseExchange === "bybit") {
+      // Bybit only has futures (perpetual), not spot
+      const fut = rows.find(
+        (r) => (r?.type || "").toLowerCase() === "future" &&
+               (r.instrument || "").toUpperCase() === 'BTCUSDT'
+      );
+      if (fut) {
+        const val = parseFloat(fut.mark_price ?? fut.last_price);
+        return Number.isFinite(val) ? val.toFixed(2) : null;
+      }
+      return null;
+    }
+
+    if (baseExchange === 'okx') {
+      // Perpetual (BTC-USDT-SWAP or BTC-USD-SWAP)
+      const perp = rows.find((r) =>
+        (r.instrument || '').toUpperCase() === `${symbol}-USDT-SWAP` ||
+        (r.instrument || '').toUpperCase() === `${symbol}-USD-SWAP`
+      );
+      if (perp) {
+        const val = parseFloat(perp.mark_price ?? perp.last_price);
+        return Number.isFinite(val) ? val.toFixed(2) : null;
+      }
+      
+      // Spot (BTC-USDT, not BTC-USDT-SWAP)
+      const spot = rows.find(
+        (r) => (r.instrument || '').toUpperCase() === `${symbol}-USDT` &&
+               (r?.type || '').toLowerCase() === 'spot'
+      );
+      if (spot) {
+        const val = parseFloat(spot.last_price);
+        return Number.isFinite(val) ? val.toFixed(2) : null;
+      }
+
+      return null;
     }
 
     return null;
-  }
-
-  return null;
-};
+  };
 
   // Sorting controls
   const handleSort = (exchange, key) => {
@@ -297,16 +334,71 @@ const DataGrid = ({ marketData, appliedConfig, selectedExchanges = [] }) => {
           </span>
         </div>
 
-        <div className="search-box">
-          <Search className="search-icon" />
-          <input
-            type="text"
-            placeholder="Search instruments..."
-            value={filterText}
-            onChange={(e) => setFilterText(e.target.value)}
-          />
+        <div className="header-right">
+          <div className="search-box">
+            <Search className="search-icon" />
+            <input
+              type="text"
+              placeholder="Search instruments..."
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+            />
+          </div>
+          
+          <button 
+            className="settings-button"
+            onClick={() => setShowSettings(!showSettings)}
+            title="Column Settings"
+          >
+            <Settings size={20} />
+          </button>
         </div>
       </div>
+      
+      {showSettings && (
+  <>
+    <div className="modal-overlay" onClick={() => setShowSettings(false)}></div>
+    <div className="settings-modal">
+      <div className="modal-header">
+        <h3>Show Columns</h3>
+        <button className="close-button" onClick={() => setShowSettings(false)}>
+          ×
+        </button>
+      </div>
+      
+      <div className="modal-body">
+        <button 
+          className="toggle-all-button"
+          onClick={toggleAllColumns}
+        >
+          {visibleColumns.length === allColumns.length ? "Hide All" : "Show All"}
+        </button>
+        
+        <div className="column-checkboxes">
+          {allColumns.map(column => (
+            <label key={column} className="column-checkbox-label">
+              <input
+                type="checkbox"
+                checked={visibleColumns.includes(column)}
+                onChange={() => toggleColumn(column)}
+              />
+              <span>{column.replace(/_/g, " ")}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+      
+      <div className="modal-footer">
+        <button className="cancel-button" onClick={() => setShowSettings(false)}>
+          Cancel
+        </button>
+        <button className="apply-button" onClick={() => setShowSettings(false)}>
+          Apply
+        </button>
+      </div>
+    </div>
+  </>
+)}
 
       <div className="tables-grid">
         {Object.entries(grouped).map(([exchangeKey, rows]) => {

@@ -9,6 +9,14 @@ class DeribitConnector {
     this.symbol = 'BTC';
     this.pendingRequests = new Map();
     this.requestId = 1;
+    this.heartbeatInterval = null;
+    this.reconnectTimer = null;
+    this.isConnecting = false;
+    this.shouldReconnect = true;
+    this.lastMessageTime = Date.now();
+    this.subscribedChannels = [];
+    this.connectionAttempts = 0;
+    this.maxReconnectAttempts = 10;
   }
 
   async connect(config = {}) {
@@ -28,15 +36,37 @@ class DeribitConnector {
 
     this.symbol = symbol.toUpperCase();
     this.config = config;
+    this.shouldReconnect = !isMetadataFetch; // Only reconnect for live streaming
     
     console.log(`🔌 Connecting Deribit for ${this.symbol}...`);
     console.log(`📋 Config:`, JSON.stringify(config, null, 2));
     
     return new Promise((resolve, reject) => {
+      if (this.isConnecting) {
+        console.log('⚠️ Connection already in progress');
+        return;
+      }
+
+      this.isConnecting = true;
       this.ws = new WebSocket('wss://www.deribit.com/ws/api/v2');
       
+      // Set connection timeout
+      const connectTimeout = setTimeout(() => {
+        if (this.ws.readyState !== WebSocket.OPEN) {
+          console.error('❌ Connection timeout');
+          this.ws.close();
+          reject(new Error('Connection timeout'));
+        }
+      }, 15000);
+      
       this.ws.on('open', async () => {
+        clearTimeout(connectTimeout);
+        this.isConnecting = false;
+        this.connectionAttempts = 0;
         console.log(`✅ Deribit ${this.symbol} connected`);
+        
+        // Start heartbeat immediately
+        this.startHeartbeat();
         
         try {
           // Step 1: Subscribe to perpetual for spot price
@@ -50,10 +80,11 @@ class DeribitConnector {
             }
           });
           
+          this.subscribedChannels.push(`ticker.${this.symbol}-PERPETUAL.100ms`);
+          
           // Wait for perpetual data
           await this.waitForSpotPrice();
           console.log(`✅ ${this.symbol} spot price received: ${this.spotPrice}`);
-          console.log(`✅ ${this.symbol} spot price received, subscribing to instruments...`);
           
           // Step 2: Fetch and subscribe to instruments
           await this.subscribeToInstruments({
@@ -77,6 +108,7 @@ class DeribitConnector {
       });
       
       this.ws.on('message', (data) => {
+        this.lastMessageTime = Date.now();
         try {
           const message = JSON.parse(data);
           this.handleMessage(message);
@@ -86,14 +118,103 @@ class DeribitConnector {
       });
       
       this.ws.on('error', (error) => {
+        clearTimeout(connectTimeout);
         console.error(`❌ Deribit ${this.symbol} WebSocket error:`, error);
-        reject(error);
+        this.isConnecting = false;
       });
       
-      this.ws.on('close', () => {
-        console.log(`Deribit ${this.symbol} disconnected`);
+      this.ws.on('close', (code, reason) => {
+        clearTimeout(connectTimeout);
+        this.isConnecting = false;
+        console.log(`❌ Deribit ${this.symbol} disconnected (code: ${code}, reason: ${reason})`);
+        this.stopHeartbeat();
+        
+        // Attempt reconnection if needed
+        if (this.shouldReconnect && this.connectionAttempts < this.maxReconnectAttempts) {
+          this.scheduleReconnect();
+        }
       });
     });
+  }
+
+  startHeartbeat() {
+    // Clear any existing heartbeat
+    this.stopHeartbeat();
+    
+    // Send heartbeat every 15 seconds (Deribit requires < 60s)
+    this.heartbeatInterval = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        // Check if we've received messages recently
+        const timeSinceLastMessage = Date.now() - this.lastMessageTime;
+        
+        if (timeSinceLastMessage > 30000) {
+          console.warn(`⚠️ No messages received for ${Math.floor(timeSinceLastMessage / 1000)}s, connection may be dead`);
+          
+         
+          if (timeSinceLastMessage > 10000) {
+            console.error('❌ Connection appears dead, forcing reconnect...');
+            this.forceReconnect();
+            return;
+          }
+        }
+        
+        // Send test request to check connection
+        this.send({
+          jsonrpc: '2.0',
+          id: 9999,
+          method: 'public/test'
+        });
+        
+        console.log(`💓 Heartbeat sent for ${this.symbol} (last message: ${Math.floor(timeSinceLastMessage / 1000)}s ago)`);
+      } else {
+        console.warn('⚠️ WebSocket not open during heartbeat');
+        this.stopHeartbeat();
+      }
+    }, 15000);
+    
+    console.log(`💓 Heartbeat started for ${this.symbol}`);
+  }
+
+  stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+      console.log(`💔 Heartbeat stopped for ${this.symbol}`);
+    }
+  }
+
+  scheduleReconnect() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+    }
+    
+    this.connectionAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, this.connectionAttempts - 1), 30000); // Exponential backoff, max 30s
+    
+    console.log(`🔄 Scheduling reconnect attempt ${this.connectionAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`);
+    
+    this.reconnectTimer = setTimeout(() => {
+      console.log(`🔄 Reconnecting ${this.symbol}...`);
+      this.connect(this.config).catch(err => {
+        console.error(`❌ Reconnection failed:`, err);
+      });
+    }, delay);
+  }
+
+  forceReconnect() {
+    console.log(`🔄 Force reconnecting ${this.symbol}...`);
+    this.shouldReconnect = true;
+    
+    if (this.ws) {
+      this.ws.close();
+    }
+    
+    // Reset and reconnect
+    setTimeout(() => {
+      this.connect(this.config).catch(err => {
+        console.error(`❌ Force reconnection failed:`, err);
+      });
+    }, 1000);
   }
 
   async subscribeToInstruments(config) {
@@ -113,7 +234,7 @@ class DeribitConnector {
     console.log(`🔔 Subscribing for ${this.symbol} instruments with config:`, JSON.stringify(config, null, 2));
     
     try {
-      // ✅ Fetch instruments from Deribit
+      // Fetch instruments from Deribit
       const response = await this.request({
         jsonrpc: '2.0',
         id: 7617,
@@ -133,24 +254,23 @@ class DeribitConnector {
       let instruments = response.result;
       console.log(`📊 Total ${this.symbol} ${instrumentType} instruments fetched: ${instruments.length}`);
       
-      // ✅ METADATA FETCH MODE - Store all and return
+      // METADATA FETCH MODE - Store all and return
       if (isMetadataFetch) {
         this.storeMetadata(instruments, instrumentType);
         return;
       }
       
-      // ✅ FUTURE INSTRUMENT HANDLING
+      // FUTURE INSTRUMENT HANDLING
       if (instrumentType === 'future') {
-        // Filter out perpetual from the list
         instruments = instruments.filter(i => !i.instrument_name.includes('PERPETUAL'));
         console.log(`📊 ${this.symbol} non-perpetual futures: ${instruments.length}`);
         
-        // ✅ CASE 1: C-F/F Strategy with ALL EXPIRIES mode
+        // CASE 1: C-F/F Strategy with ALL EXPIRIES mode
         if (subscribeAllFutures || 
             (strategy && strategy.toLowerCase() === 'c-f/f' && 
              (!fut1Expiry || fut1Expiry === 'all' || !fut2Expiry || fut2Expiry === 'all'))) {
           
-          console.log(`🌐 C-F/F ALL MODE: Subscribing to ALL ${this.symbol} futures (no filtering)`);
+          console.log(`🌐 C-F/F ALL MODE: Subscribing to ALL ${this.symbol} futures`);
           
           const futureInstruments = instruments.filter(i => i.instrument_name.startsWith(this.symbol));
           console.log(`🎯 Found ${futureInstruments.length} total futures for ${this.symbol}`);
@@ -159,15 +279,14 @@ class DeribitConnector {
           
           if (channels.length > 0) {
             await this.subscribeInBatches(channels);
+            this.subscribedChannels.push(...channels);
             console.log(`✅ Subscribed to ${channels.length} ${this.symbol} future channels`);
-          } else {
-            console.warn(`⚠️ No future channels found for ${this.symbol}`);
           }
           
           return;
         }
         
-        // ✅ CASE 2: C-F/F with specific expiries
+        // CASE 2: C-F/F with specific expiries
         if (strategy && strategy.toLowerCase() === 'c-f/f') {
           const expiriesToSubscribe = new Set();
           
@@ -187,7 +306,7 @@ class DeribitConnector {
           }
         }
         
-        // ✅ CASE 3: Jelly/Synthetic with specific future expiry
+        // CASE 3: Jelly/Synthetic with specific future expiry
         else if (expiry || futureExpiry) {
           const targetExpiry = expiry || futureExpiry;
           console.log(`🎯 Filtering for specific expiry: ${targetExpiry}`);
@@ -201,23 +320,20 @@ class DeribitConnector {
         if (channels.length > 0) {
           console.log(`📊 Subscribing to ${channels.length} ${this.symbol} future channels`);
           await this.subscribeInBatches(channels);
+          this.subscribedChannels.push(...channels);
           console.log(`✅ Subscribed to ${channels.length} ${this.symbol} future channels`);
-        } else {
-          console.warn(`⚠️ No future channels to subscribe for ${this.symbol}`);
         }
         
         return;
       }
       
-      // ✅ OPTION INSTRUMENT HANDLING
+      // OPTION INSTRUMENT HANDLING
       if (instrumentType === 'option') {
-        // Filter by expiry if specified
         if (expiry) {
           instruments = instruments.filter(i => i.instrument_name.includes(expiry));
           console.log(`🎯 After expiry filter (${expiry}): ${instruments.length} ${this.symbol} options`);
         }
         
-        // Filter by strike range based on spot price
         if (this.spotPrice > 0) {
           const interval = parseInt(strikeInterval) || (this.symbol === 'ETH' ? 50 : 1000);
           const nearestStrike = Math.round(this.spotPrice / interval) * interval;
@@ -225,7 +341,7 @@ class DeribitConnector {
           const minStrike = nearestStrike - (portfolioCount * interval);
           const maxStrike = nearestStrike + (portfolioCount * interval);
           
-          console.log(`🎯 Strike range for ${this.symbol}: ${minStrike} - ${maxStrike} (nearest: ${nearestStrike}, interval: ${interval})`);
+          console.log(`🎯 Strike range for ${this.symbol}: ${minStrike} - ${maxStrike}`);
           
           instruments = instruments.filter(i => {
             const match = i.instrument_name.match(/-(\d+)-[CP]$/);
@@ -239,15 +355,13 @@ class DeribitConnector {
           console.log(`🎯 After strike filter: ${instruments.length} ${this.symbol} options`);
         }
         
-        // Subscribe to filtered options
         const channels = instruments.map(inst => `ticker.${inst.instrument_name}.100ms`);
         
         if (channels.length > 0) {
           console.log(`📊 Subscribing to ${channels.length} ${this.symbol} option channels`);
           await this.subscribeInBatches(channels);
+          this.subscribedChannels.push(...channels);
           console.log(`✅ Subscribed to ${channels.length} ${this.symbol} option channels`);
-        } else {
-          console.warn(`⚠️ No option channels to subscribe for ${this.symbol}`);
         }
       }
       
@@ -265,7 +379,6 @@ class DeribitConnector {
     instruments.forEach(inst => {
       const name = inst.instrument_name;
       
-      // Extract expiry
       const expiryMatch = name.match(/-(\d{1,2}[A-Z]{3}\d{2})/);
       if (expiryMatch && !name.includes('PERPETUAL')) {
         const expiry = expiryMatch[1];
@@ -280,7 +393,6 @@ class DeribitConnector {
         }
       }
       
-      // Extract strike for options
       const strikeMatch = name.match(/-(\d+)-[CP]$/);
       if (strikeMatch) {
         const strike = parseInt(strikeMatch[1]);
@@ -324,7 +436,6 @@ class DeribitConnector {
         params: { channels: batch }
       });
       
-      // Small delay between batches
       if (i + batchSize < channels.length) {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
@@ -340,7 +451,6 @@ class DeribitConnector {
         }
       }, 100);
       
-      // Timeout after 10 seconds
       setTimeout(() => {
         clearInterval(checkInterval);
         if (this.spotPrice === 0) {
@@ -366,7 +476,6 @@ class DeribitConnector {
       const channel = message.params.channel;
       const data = message.params.data;
       
-      // Extract instrument name from channel
       const instrumentMatch = channel.match(/ticker\.([^.]+)\./);
       if (!instrumentMatch) return;
       
@@ -379,8 +488,9 @@ class DeribitConnector {
           this.spotPrice = mid;
         }
       }
-       const parts = instrument.split("-");
-      const isOption = parts.length === 4
+      
+      const parts = instrument.split("-");
+      const isOption = parts.length === 4;
       const priceFactor = isOption ? (data.underlying_price || 1) : 1;
 
       // Format and send market data
@@ -405,6 +515,8 @@ class DeribitConnector {
   send(message) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
+    } else {
+      console.warn(`⚠️ Cannot send message, WebSocket not open (state: ${this.ws?.readyState})`);
     }
   }
 
@@ -422,7 +534,7 @@ class DeribitConnector {
       
       this.send(message);
       
-      // Timeout after 30 seconds
+      // Timeout after 30 seconds and clean up
       setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
@@ -433,11 +545,22 @@ class DeribitConnector {
   }
 
   disconnect() {
+    console.log(`🛑 Disconnecting ${this.symbol}...`);
+    this.shouldReconnect = false;
+    this.stopHeartbeat();
+    
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
+    
     this.pendingRequests.clear();
+    this.subscribedChannels = [];
   }
 }
 

@@ -401,8 +401,8 @@ const Dashboard = () => {
     
     if (keyParts[0] === 'deribit' && keyParts.length >= 3) {
       matchingExchange = `${keyParts[0]}_${keyParts[1]}`;
-    } else if (keyParts[0] === 'okx' && keyParts.length >= 3) {
-      matchingExchange = `${keyParts[0]}_${keyParts[1]}`;
+    } else if (keyParts[0] === 'okx' && keyParts.length >= 2) {
+      matchingExchange = keyParts[0];
     } else if (keyParts[0] === 'lighter') {
       matchingExchange = 'lighter';
     } else {
@@ -563,41 +563,77 @@ else if (baseExchange === 'bybit') {
   }
 }
     
-    else if (baseExchange === 'okx') {
-      const rowType = (row?.type || '').toLowerCase();
+  
+else if (baseExchange === 'okx') {
+  const rowType = (row?.type || '').toLowerCase();
+  const configType = (applied.instrumentType || '').toLowerCase();
+  
+  console.log(`🔍 [OKX Filter] Checking ${upperInstrument}`, {
+    rowType,
+    configType,
+    expiry: applied.expiry
+  });
 
-      if (type === 'swap' && rowType === 'swap') {
-        include = true;
+  // ✅ FIX: Normalize both type comparisons
+  if (configType === 'swap' && rowType === 'swap') {
+    include = true;
+    console.log('✅ [OKX] Matched SWAP');
+  }
+  else if ((configType === 'futures' || configType === 'future') && rowType === 'futures') {
+    include = true;
+    console.log('✅ [OKX] Matched FUTURES');
+    
+    // Filter by expiry if specified
+    if (applied.expiry && applied.expiry.trim()) {
+      const expiryNorm = applied.expiry.trim();
+      // OKX uses YYMMDD format: 251024
+      const hasExpiry = upperInstrument.includes(expiryNorm);
+      include = hasExpiry;
+      console.log(`🔍 [OKX] Expiry filter: ${expiryNorm}, includes: ${hasExpiry}`);
+    }
+  }
+  else if (configType === 'spot' && rowType === 'spot') {
+    include = true;
+    console.log('✅ [OKX] Matched SPOT');
+  }
+  else if (configType === 'option' && rowType === 'option') {
+    // OKX options: BTC-USD-241023-109000-C
+    const isOkxOption = /^[A-Z]{3}-USD[T]?-\d{6}-\d{4,6}-[CP]$/i.test(upperInstrument);
+    
+    if (isOkxOption) {
+      include = true;
+      console.log('✅ [OKX] Matched OPTION');
+
+      // Filter by expiry if specified
+      if (applied.expiry && applied.expiry.trim()) {
+        const expiryNorm = applied.expiry.trim();
+        const hasExpiry = upperInstrument.includes(expiryNorm);
+        include = hasExpiry;
+        console.log(`🔍 [OKX] Option expiry filter: ${expiryNorm}, includes: ${hasExpiry}`);
       }
-      else if (type === 'futures' && rowType === 'futures') {
-        include = true;
-      }
-      else if (type === 'spot' && rowType === 'spot') {
-        include = true;
-      }
-      else if (type === 'option' && rowType === 'option') {
-        include = true;
 
-        if (applied.expiry && applied.expiry.trim()) {
-          const expiryNorm = applied.expiry.trim().toUpperCase();
-          include = upperInstrument.includes(expiryNorm);
-        }
+      // Filter by strike range if specified
+      if (include && applied.startStrike && applied.startStrike.trim()) {
+        const start = parseInt(applied.startStrike);
+        const gap = parseInt(applied.gap || 1000);
+        const count = parseInt(applied.entryCount || 5);
+        
+        // Extract strike from BTC-USD-241023-109000-C
+        const parts = upperInstrument.split('-');
+        const strikePart = parts.length >= 4 ? parts[3] : null;
+        const strike = parseInt(strikePart);
 
-        if (include && applied.startStrike && applied.startStrike.trim()) {
-          const start = parseInt(applied.startStrike);
-          const gap = parseInt(applied.gap || 1000);
-          const count = parseInt(applied.entryCount || 5);
-          const parts = upperInstrument.split('-');
-          const strikePart = parts.length >= 4 ? parts[3] : null;
-          const strike = parseInt(strikePart);
-
-          if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
-            const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
-            include = validStrikes.includes(strike);
-          }
+        if (!isNaN(start) && !isNaN(strike) && gap > 0 && count > 0) {
+          const validStrikes = Array.from({ length: count }, (_, i) => start + i * gap);
+          include = validStrikes.includes(strike);
+          console.log(`🔍 [OKX] Strike filter: ${strike}, valid: ${include}`);
         }
       }
     }
+  }
+  
+  console.log(`🔍 [OKX] Final include decision: ${include} for ${upperInstrument}`);
+}
     
     if (include) {
       filtered[key] = row;

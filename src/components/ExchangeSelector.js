@@ -60,6 +60,7 @@ const ExchangeSelector = ({
 
     if (!exchangeConfig) return null;
 
+    // ✅ LIGHTER EXCHANGE
     if (baseExchange === "lighter") {
       return (
         <div className="exchange-config-card" key={exchangeId}>
@@ -86,6 +87,7 @@ const ExchangeSelector = ({
       );
     }
 
+    // ✅ LOADING STATE
     if (!exchangeData) {
       return (
         <div className="exchange-config-card" key={exchangeId}>
@@ -101,6 +103,7 @@ const ExchangeSelector = ({
 
     const symbol = (exchangeConfig.symbol || "BTC").toUpperCase();
 
+    // ✅ SPOT PRICE CALCULATION
     let spotKey;
     if (baseExchange === "deribit") {
       spotKey = `${exchangeId}_${symbol.toLowerCase()}-perpetual`;
@@ -119,6 +122,7 @@ const ExchangeSelector = ({
 
     return (
       <div className="exchange-config-card" key={exchangeId}>
+        {/* ✅ HEADER */}
         <div className="config-header">
           <div className="config-title-row">
             <h3>
@@ -159,7 +163,9 @@ const ExchangeSelector = ({
           </div>
         </div>
 
+        {/* ✅ CONFIG GRID - SYMBOL & INSTRUMENT TYPE */}
         <div className="config-grid">
+          {/* SYMBOL SELECTOR (Deribit & OKX only) */}
           {["deribit", "okx"].includes(baseExchange) && (
             <div className="form-group">
               <label>Symbol</label>
@@ -181,6 +187,7 @@ const ExchangeSelector = ({
             </div>
           )}
 
+          {/* INSTRUMENT TYPE SELECTOR */}
           <div className="form-group">
             <label>Instrument Type</label>
             <select
@@ -217,7 +224,32 @@ const ExchangeSelector = ({
             </select>
           </div>
 
-          {exchangeConfig.instrumentType === "option" && (
+          {/* ✅ OKX EXPIRY DROPDOWN (Futures & Options) */}
+          {baseExchange === "okx" && 
+           (exchangeConfig.instrumentType === 'futures' || exchangeConfig.instrumentType === 'option') && (
+            <div className="form-group">
+              <label>Expiry Date</label>
+              <select
+                value={exchangeConfig.expiry || ""}
+                onChange={(e) => onConfigChange(exchangeId, "expiry", e.target.value)}
+              >
+                <option value="">All Expiries</option>
+                {(exchangeConfig.instrumentType === 'option' 
+                  ? exchangeData.optionExpiries 
+                  : exchangeData.futureExpiries)
+                  ?.slice()
+                  .sort((a, b) => parseExpiry(a) - parseExpiry(b))
+                  .map((expiry) => (
+                    <option key={expiry} value={expiry}>
+                      {expiry}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
+
+          {/* ✅ OTHER EXCHANGES EXPIRY DROPDOWN (Options only) */}
+          {baseExchange !== "okx" && exchangeConfig.instrumentType === "option" && (
             <div className="form-group">
               <label>Expiry Date</label>
               <select
@@ -240,6 +272,7 @@ const ExchangeSelector = ({
           )}
         </div>
 
+        {/* ✅ OPTIONS CONFIG (Entry Count, Start Strike, Strike Gap) */}
         {exchangeConfig.instrumentType === "option" && (
           <>
             <div className="config-grid">
@@ -329,6 +362,7 @@ const ExchangeSelector = ({
           </>
         )}
 
+        {/* ✅ ACTION BUTTONS FOR FUTURES/SWAP/SPOT */}
         {["future", "swap", "spot", "futures"].includes(exchangeConfig.instrumentType) && (
           <div className="action-buttons">
             <button className="submit-btnn" onClick={() => onSubmit(exchangeId)}>

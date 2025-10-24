@@ -310,7 +310,7 @@ const sortExpiriesByDate = (expiries) => {
 
   
 const handleAddCFFRow = async () => {
-  const { tableId, exchange, fut1Expiry, fut2Expiry } = cffDialogData;
+  const { tableId, rowIndex, exchange, fut1Expiry, fut2Expiry } = cffDialogData;
   
   if (!exchange || !fut1Expiry || !fut2Expiry) {
     alert('Please select exchange, fut1, and fut2 expiries');
@@ -326,9 +326,9 @@ const handleAddCFFRow = async () => {
       body: JSON.stringify({ 
         tableId, 
         exchange: exchange.toLowerCase(), 
-        fut1Expiry,  // ✅ Send both expiries
+        fut1Expiry,
         fut2Expiry,
-        insertAfterIndex: cffDialogData.rowIndex
+        insertAfterIndex: rowIndex  // ✅ Pass the actual row index
       })
     });
 
@@ -339,13 +339,14 @@ const handleAddCFFRow = async () => {
         const newTables = [...prevTables];
         const tableIndex = newTables.findIndex(t => t.id === tableId);
         if (tableIndex !== -1) {
+          // ✅ DON'T sort - use the data as returned from backend
           newTables[tableIndex] = {
             ...newTables[tableIndex],
             config: {
               ...newTables[tableIndex].config,
               selectedFutures: result.selectedFutures || []
             },
-            data: result.data || []
+            data: result.data || []  // Use data directly without sorting
           };
         }
         return newTables;
@@ -668,19 +669,7 @@ const handleAddCFFRow = async () => {
     
     const headers = allHeaders.filter(header => header !== 'exchange');
 
-    // Sort data by fut1 and fut2 expiry dates
-    const sortedData = [...filteredData].sort((a, b) => {
-      const dateA1 = parseExpiryDate(a.fut1);
-      const dateB1 = parseExpiryDate(b.fut1);
-      
-      if (dateA1.getTime() !== dateB1.getTime()) {
-        return dateA1 - dateB1;
-      }
-      
-      const dateA2 = parseExpiryDate(a.fut2);
-      const dateB2 = parseExpiryDate(b.fut2);
-      return dateA2 - dateB2;
-    });
+    const sortedData = [...filteredData];
 
     return (
       <div style={{ position: 'relative' }}>
@@ -750,28 +739,44 @@ const handleAddCFFRow = async () => {
                       ❌
                     </button>
                     <button 
-                      onClick={() => {
-                        setActiveTableIndex(tables.findIndex(t => t.id === table.id));
-                        setCffDialogData({
-                          tableId: table.id,
-                          exchange: table.config.exchange || initialExchange,
-                          futureExpiry: ''
-                        });
-                        setShowCFFDialog(true);
-                      }}
-                      style={{
-                        padding: '3px 6px',
-                        background: '#27ae60',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '3px',
-                        cursor: 'pointer',
-                        fontSize: '10px'
-                      }}
-                      title="Add row after this"
-                    >
-                      ➕
-                    </button>
+  onClick={() => {
+    const tableIndex = tables.findIndex(t => t.id === table.id);
+    const currentExchange = table.config.exchange || initialExchange;
+    const currentSymbol = table.config.symbol || 'BTC';
+    
+    setActiveTableIndex(tableIndex);
+    setCffDialogData({
+      tableId: table.id,
+      rowIndex: idx,  // ✅ Pass the actual row index from the map
+      exchange: currentExchange,
+      fut1Expiry: '',
+      fut2Expiry: ''
+    });
+    
+    // Fetch expiries when opening dialog
+    if (currentExchange === 'deribit') {
+      fetchDeribitInstruments('future');
+    } else if (currentExchange === 'binance') {
+      fetchBinanceInstruments('future');
+    } else if (currentExchange === 'bybit') {
+      fetchBybitInstruments('future');
+    }
+    
+    setShowCFFDialog(true);
+  }}
+  style={{
+    padding: '3px 6px',
+    background: '#27ae60',
+    color: 'white',
+    border: 'none',
+    borderRadius: '3px',
+    cursor: 'pointer',
+    fontSize: '10px'
+  }}
+  title="Add row after this"
+>
+  ➕
+</button>
                   </div>
                 </td>
               </tr>
@@ -1856,7 +1861,7 @@ const applyStrategy = async () => {
     <option value="binance">Binance</option>
     <option value="deribit">Deribit</option>
     <option value="bybit">Bybit</option>
-    <option value="lighter">no</option>
+    <option value="lighter">Lighter</option>
     <option value="okx">OKX</option>
   </select>
 </div>

@@ -75,7 +75,7 @@ function formatMarketDataKey(exchange, instrument, config = {}) {
       }
     }
     
-    formattedKey = `okx_${symbol}_${instrumentUpper}`;
+    formattedKey = `okx_${instrumentUpper}`;
   } else if (baseExchange === 'lighter') {
     formattedKey = `lighter_${instrumentUpper}`;
   } else {
@@ -158,14 +158,11 @@ function startStrategyUpdates() {
         const updatesToSend = updates.filter(update => {
           const lastTime = lastBroadcastTime.get(update.tableId) || 0;
           const timeSinceLastUpdate = now - lastTime;
-          
-          // Always send if more than 2 seconds passed
           if (timeSinceLastUpdate > 2000) {
             lastBroadcastTime.set(update.tableId, now);
             return true;
           }
-          
-          // Otherwise only send if data changed significantly
+
           return false;
         });
         
@@ -477,6 +474,7 @@ app.post('/api/fetch-metadata', async (req, res) => {
 });
 
 // ==================== STREAMING ENDPOINTS ====================
+
 app.post('/api/start-streaming', async (req, res) => {
   const { exchanges, config } = req.body;
   
@@ -536,14 +534,19 @@ app.post('/api/start-streaming', async (req, res) => {
     
     console.log(`📊 [MARKETDATA] Total keys: ${Object.keys(marketData).length}`);
     
-    const binanceKeys = Object.keys(marketData).filter(k => k.startsWith('binance'));
-    console.log(`📊 [MARKETDATA] Binance keys: ${binanceKeys.length}`);
-    if (binanceKeys.length > 0) {
-      console.log(`📊 [MARKETDATA] Sample Binance keys:`, binanceKeys.slice(0, 5));
-    } else {
-      console.warn(`⚠️ [MARKETDATA] NO BINANCE KEYS FOUND!`);
-      console.log(`📊 [MARKETDATA] All keys:`, Object.keys(marketData).slice(0, 10));
+    // ✅ FIX: Check each exchange separately
+    for (const exchange of exchanges) {
+      const baseExchange = exchange.split('_')[0];
+      const exchangeKeys = Object.keys(marketData).filter(k => k.startsWith(`${baseExchange}_`));
+      console.log(`📊 [MARKETDATA] ${exchange} keys: ${exchangeKeys.length}`);
+      if (exchangeKeys.length > 0) {
+        console.log(`📊 [MARKETDATA] Sample ${exchange} keys:`, exchangeKeys.slice(0, 5));
+      } else {
+        console.warn(`⚠️ [MARKETDATA] NO [${exchange}] keys FOUND!`);
+      }
     }
+    
+    console.log(`📊 [MARKETDATA] All keys sample:`, Object.keys(marketData).slice(0, 10));
     
     res.json({ success: true });
   } catch (error) {

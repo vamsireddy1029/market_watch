@@ -809,7 +809,6 @@ app.post('/api/strategy/cff/add-row', async (req, res) => {
         error: 'tableId, exchange, fut1Expiry, and fut2Expiry required' 
       });
     }
-    
     const config = strategyCalculator.activeStrategies.get(tableId);
     if (!config) {
       return res.status(404).json({ success: false, error: 'Strategy not found' });

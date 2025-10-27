@@ -32,7 +32,9 @@ const Dashboard = () => {
     console.log('🔌 Initializing WebSocket connection...');
     
     const connectWebSocket = () => {
-      const ws = new WebSocket('ws://localhost:8080');
+      const WS_URL = process.env.REACT_APP_BACKEND_URL.replace('https', 'wss');
+      const ws = new WebSocket(`${WS_URL}/ws`);
+
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -152,7 +154,7 @@ const Dashboard = () => {
       
       console.log('📡 Fetching metadata:', body);
       
-      const response = await fetch('http://localhost:8080/api/fetch-metadata', {
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/fetch-metadata`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -289,7 +291,7 @@ const Dashboard = () => {
 
       console.log('🚀 Submitting config:', submitConfig);
 
-      const response = await fetch('http://localhost:8080/api/start-streaming', {
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/start-streaming`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ exchanges: exchangesToSubmit, config: submitConfig })
@@ -317,7 +319,7 @@ const Dashboard = () => {
 
   const handleExitExchange = async (exchangeId) => {
     try {
-      await fetch('http://localhost:8080/api/stop-streaming', {
+      await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/stop-streaming`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ exchanges: [exchangeId] })

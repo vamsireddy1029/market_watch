@@ -98,14 +98,23 @@ const sortExpiriesByDate = (expiries) => {
     return new Date(0);
   };
 
-  // Sort data by expiry date
-  const sortByExpiry = (data) => {
-    return [...data].sort((a, b) => {
-      const dateA = parseExpiryDate(a.expiry);
-      const dateB = parseExpiryDate(b.expiry);
-      return dateA - dateB;
-    });
-  };
+// Sort C-F/F data by expiry dates (fut1, then fut2)
+const sortCFFData = (data) => {
+  return [...data].sort((a, b) => {
+    // Sort by fut1 date first
+    const dateA1 = parseExpiryDate(a.fut1);
+    const dateB1 = parseExpiryDate(b.fut1);
+    
+    if (dateA1.getTime() !== dateB1.getTime()) {
+      return dateA1 - dateB1;
+    }
+    
+    // If fut1 is same, sort by fut2 date
+    const dateA2 = parseExpiryDate(a.fut2);
+    const dateB2 = parseExpiryDate(b.fut2);
+    return dateA2 - dateB2;
+  });
+};
 
   const getUniqueValues = (data, column) => {
     const values = new Set();
@@ -265,7 +274,7 @@ const sortExpiriesByDate = (expiries) => {
   const removeRow = async (tableId, rowData) => {
   try {
     console.log('🗑️ Remove row called:', { tableId, rowData });
-    const response = await fetch('http://localhost:8080/api/strategy/cff/remove-row', {
+    const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/strategy/cff/remove-row`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -279,21 +288,24 @@ const sortExpiriesByDate = (expiries) => {
     const result = await response.json();
     
     if (result.success) {
-      setTables(prevTables => {
-        const newTables = [...prevTables];
-        const tableIndex = newTables.findIndex(t => t.id === tableId);
-        if (tableIndex !== -1) {
-          newTables[tableIndex] = { 
-            ...newTables[tableIndex], 
-            data: result.data || [],
-            config: {
-              ...newTables[tableIndex].config,
-              selectedFutures: result.selectedFutures || []
-            }
-          };
+  setTables(prevTables => {
+    const newTables = [...prevTables];
+    const tableIndex = newTables.findIndex(t => t.id === tableId);
+    if (tableIndex !== -1) {
+      const data = result.data || [];
+      const hasCustomOrder = newTables[tableIndex].config.hasCustomRowOrder;
+      
+      newTables[tableIndex] = { 
+        ...newTables[tableIndex], 
+        data: data,  // Don't sort if has custom order
+        config: {
+          ...newTables[tableIndex].config,
+          selectedFutures: result.selectedFutures || []
         }
-        return newTables;
-      });
+      };
+    }
+    return newTables;
+  });
       
       console.log('✅ Row removed successfully');
     } else {
@@ -320,7 +332,13 @@ const handleAddCFFRow = async () => {
   setShowCFFDialog(false);
   
   try {
-    const response = await fetch('http://localhost:8080/api/strategy/cff/add-row', {
+    // ✅ FIX: Get the current row data at rowIndex
+    const currentTable = tables.find(t => t.id === tableId);
+    const currentRow = currentTable?.data[rowIndex];
+    
+    console.log('📤 Adding row after:', currentRow);
+    
+    const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/strategy/cff/add-row`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -328,7 +346,8 @@ const handleAddCFFRow = async () => {
         exchange: exchange.toLowerCase(), 
         fut1Expiry,
         fut2Expiry,
-        insertAfterIndex: rowIndex  // ✅ Pass the actual row index
+        insertAfterIndex: rowIndex,
+        currentRowData: currentRow  // ✅ CRITICAL: Pass the actual row data
       })
     });
 
@@ -339,24 +358,30 @@ const handleAddCFFRow = async () => {
         const newTables = [...prevTables];
         const tableIndex = newTables.findIndex(t => t.id === tableId);
         if (tableIndex !== -1) {
-          // ✅ DON'T sort - use the data as returned from backend
+          // ✅ Backend returns data in correct order already
           newTables[tableIndex] = {
             ...newTables[tableIndex],
             config: {
               ...newTables[tableIndex].config,
-              selectedFutures: result.selectedFutures || []
+              selectedFutures: result.selectedFutures || [],
+              hasCustomRowOrder: true  // Mark as having custom order
             },
-            data: result.data || []  // Use data directly without sorting
+            data: result.data || []  // Use data directly from backend (already sorted)
           };
         }
         return newTables;
       });
+      
+      console.log('✅ Row added successfully');
+    } else {
+      alert('Failed to add row: ' + (result.error || 'Unknown error'));
     }
   } catch (error) {
     console.error('Add C-F/F row error:', error);
     alert('Failed to add row: ' + error.message);
   }
-};
+}
+
   const renderTable = (table) => {
   if (table.isLoading) {
     return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>Loading strategy data...</div>;
@@ -654,22 +679,16 @@ const handleAddCFFRow = async () => {
     );
   }
 
-  // ================================
-  // C-F/F STRATEGY (GENERIC TABLE)
-  // ================================
- 
-  // ================================
-  // C-F/F STRATEGY (GENERIC TABLE)
-  // ================================
  if (isCFF) {
-    // ✅ Filter out 'exchange' column from headers
-    const allHeaders = filteredData.length > 0 
-      ? Object.keys(filteredData[0] || {})
-      : [];
-    
-    const headers = allHeaders.filter(header => header !== 'exchange');
+  // Filter out 'exchange' column from headers
+  const allHeaders = filteredData.length > 0 
+    ? Object.keys(filteredData[0] || {})
+    : [];
+  
+  const headers = allHeaders.filter(header => header !== 'exchange');
 
-    const sortedData = [...filteredData];
+  // Sort data lexicographically by fut1, then fut2
+  const sortedData = sortCFFData(filteredData);
 
     return (
       <div style={{ position: 'relative' }}>
@@ -840,7 +859,7 @@ const handleAddCFFRow = async () => {
   const loadSavedConfigs = async () => {
     try {
       if (storageMode === 'backend') {
-        const response = await fetch('http://localhost:8080/api/configs');
+        const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/configs`);
         const result = await response.json();
         if (result.success) {
           setSavedConfigs(result.configs || {});
@@ -874,7 +893,7 @@ const handleAddCFFRow = async () => {
 
     try {
       if (storageMode === 'backend') {
-        const response = await fetch('http://localhost:8080/api/configs/save', {
+        const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/configs/save`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -928,7 +947,7 @@ const handleAddCFFRow = async () => {
       const table = loadedTables[i];
       
       try {
-        const response = await fetch('http://localhost:8080/api/strategy/add', {
+        const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/strategy/add`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
@@ -948,8 +967,9 @@ const handleAddCFFRow = async () => {
               
               // ✅ FIX: Only sort if C-F/F in "All Expiries" mode
               const isCFF = table.config.strategy === 'C-F/F';
-              const isCustomMode = table.config.selectedFutures !== undefined;
-              const processedData = (isCFF && !isCustomMode) ? sortByExpiry(data) : data;
+const isCustomMode = table.config.selectedFutures !== undefined;
+const hasCustomOrder = table.config.hasCustomRowOrder;  // ✅ NEW
+const processedData = (isCFF && !isCustomMode && !hasCustomOrder) ? sortCFFData(data) : data;
               
               newTables[tableIndex] = {
                 ...newTables[tableIndex],
@@ -988,7 +1008,7 @@ const handleAddCFFRow = async () => {
 
     try {
       if (storageMode === 'backend') {
-        const response = await fetch('http://localhost:8080/api/configs/delete', {
+        const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/configs/delete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: selectedConfig })
@@ -1074,10 +1094,11 @@ useEffect(() => {
           if (strategyData) {
             const data = strategyData.data || [];
             const isCFF = table.config.strategy === 'C-F/F';
-            const isCustomMode = table.config.selectedFutures !== undefined;
-            
-            // Process data
-            const processedData = (isCFF && !isCustomMode) ? sortByExpiry(data) : [...data];
+const isCustomMode = table.config.selectedFutures !== undefined;
+const hasCustomOrder = table.config.hasCustomRowOrder;  // ✅ NEW
+
+// Process data - don't sort if has custom row order
+const processedData = (isCFF && !isCustomMode && !hasCustomOrder) ? sortCFFData(data) : data;
             
             // ✅ FIX: Update data WITHOUT remounting component
             return {
@@ -1165,7 +1186,7 @@ useEffect(() => {
     
     setIsLoadingExpiries(true);
     
-    const response = await fetch('http://localhost:8080/api/fetch-metadata', {
+    const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/fetch-metadata`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -1241,7 +1262,7 @@ const fetchBybitInstruments = async (type = 'option') => {
     
     setIsLoadingExpiries(true);
     
-    const response = await fetch('http://localhost:8080/api/fetch-metadata', {
+    const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/fetch-metadata`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -1316,7 +1337,7 @@ const fetchDeribitInstruments = async (type = 'option') => {
     
     setIsLoadingExpiries(true);
     
-    const response = await fetch('http://localhost:8080/api/fetch-metadata', {
+    const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/fetch-metadata`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -1542,7 +1563,7 @@ const applyStrategy = async () => {
   try {
     const tableId = tables[activeTableIndex].id;
     
-    const response = await fetch('http://localhost:8080/api/strategy/add', {
+    const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/strategy/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tableId, config })
@@ -1578,7 +1599,7 @@ const applyStrategy = async () => {
 };
   const removeTable = async (id) => {
     try {
-      await fetch('http://localhost:8080/api/strategy/remove', {
+      await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/strategy/remove`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tableId: id })
